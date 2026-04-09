@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     env_file:
       - .env
     environment:
@@ -13,7 +14,13 @@ services:
       - telegram-session-data:/data/telegram
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/healthz"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status == 200 else 1)",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -23,6 +30,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     env_file:
       - .env
     environment:

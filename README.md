@@ -22,7 +22,7 @@ cp .env.example .env
 3. Authenticate once and persist the session volume:
 
 ```bash
-docker compose run --rm --profile auth telegram-auth
+docker compose --profile auth run --rm telegram-auth
 ```
 
 4. Start the API:
