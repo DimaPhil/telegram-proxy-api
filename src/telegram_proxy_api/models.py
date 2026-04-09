@@ -92,7 +92,7 @@ class MediaItem(BaseModel):
     size_bytes: int | None = None
     width: int | None = None
     height: int | None = None
-    duration_seconds: int | None = None
+    duration_seconds: float | None = None
     access_path: str
     telegram_raw: dict[str, Any] = Field(default_factory=dict)
 

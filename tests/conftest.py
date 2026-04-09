@@ -128,6 +128,7 @@ def make_media(
     mime_type: str = "image/jpeg",
     ext: str = ".jpg",
     size: int | None = None,
+    duration: float | None = None,
 ):
     size = size or len(payload)
     file = SimpleNamespace(
@@ -137,7 +138,7 @@ def make_media(
         size=size,
         width=800,
         height=600,
-        duration=None,
+        duration=duration,
     )
     media = SimpleNamespace(
         kind=kind,

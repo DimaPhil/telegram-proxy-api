@@ -46,7 +46,7 @@ def test_serialize_contact():
 
 
 def test_serialize_message_detail_includes_media():
-    media, file = make_media(payload=b"image-data", file_name="photo.jpg")
+    media, file = make_media(payload=b"image-data", file_name="photo.jpg", duration=31.6)
     message = make_message(11, media=media, file=file)
     descriptors = build_media_descriptors(chat_id="200", anchor_message_id=11, messages=[message])
 
@@ -56,6 +56,7 @@ def test_serialize_message_detail_includes_media():
     assert result.has_media is True
     assert result.media_count == 1
     assert result.media[0].file_name == "photo.jpg"
+    assert result.media[0].duration_seconds == 31.6
     assert result.media[0].access_path.endswith("/media/11:0")
 
 
