@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-proxy-api"
+version = "0.1.0"
+description = "Read-focused Telegram proxy API built with FastAPI and Telethon"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptg>=0.5.0",
+    "fastapi>=0.115.12",
+    "pydantic-settings>=2.8.1",
+    "PyYAML>=6.0.2",
+    "python-dotenv>=1.1.0",
+    "telethon>=1.42.0",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28.1",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
+    "pytest-cov>=6.1.1",
+    "respx>=0.22.0",
+]
+
+[project.scripts]
+telegram-proxy-api = "telegram_proxy_api.main:main"
+telegram-proxy-auth = "telegram_proxy_api.auth_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=telegram_proxy_api --cov-report=term-missing --cov-fail-under=80"
+asyncio_mode = "auto"
+markers = [
+    "e2e: marks tests that use a real Telegram account and local credentials",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["telegram_proxy_api"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
