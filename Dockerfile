@@ -18,6 +18,6 @@ RUN useradd --create-home --shell /bin/bash appuser \
 
 USER appuser
 
-EXPOSE 8080
+EXPOSE 4040
 
 CMD ["telegram-proxy-api"]

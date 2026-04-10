@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Telegram Proxy API", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
-    app_port: int = Field(default=8080, alias="APP_PORT")
+    app_port: int = Field(
+        default=4040,
+        validation_alias=AliasChoices("PORT", "APP_PORT"),
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     telegram_api_id: int = Field(default=0, alias="TELEGRAM_API_ID")

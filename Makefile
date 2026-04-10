@@ -23,7 +23,7 @@ auth: install
 	$(VENV_AUTH)
 
 run: install
-	$(VENV_PYTHON) -m uvicorn telegram_proxy_api.app:app --host 0.0.0.0 --port 8080
+	$(VENV_DIR)/bin/telegram-proxy-api
 
 pre-commit-install: install
 	$(VENV_DIR)/bin/pre-commit install

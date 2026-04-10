@@ -31,7 +31,7 @@ docker compose --profile auth run --rm telegram-auth
 docker compose up -d telegram-proxy
 ```
 
-The API will be available at [http://localhost:8080](http://localhost:8080).
+The API will be available at [http://localhost:4040](http://localhost:4040) by default. Set `PORT` to change it; the app also still accepts `APP_PORT` for compatibility.
 
 ## Manual Authentication Without Docker
 

@@ -7,9 +7,10 @@ services:
     env_file:
       - .env
     environment:
+      PORT: ${PORT:-4040}
       TELEGRAM_SESSION_DIR: /data/telegram
     ports:
-      - "8080:8080"
+      - "${PORT:-4040}:${PORT:-4040}"
     volumes:
       - telegram-session-data:/data/telegram
     restart: unless-stopped
@@ -19,7 +20,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status == 200 else 1)",
+          "import os, sys, urllib.request; port = os.getenv('PORT', '4040'); sys.exit(0 if urllib.request.urlopen(f'http://localhost:{port}/healthz').status == 200 else 1)",
         ]
       interval: 30s
       timeout: 10s
