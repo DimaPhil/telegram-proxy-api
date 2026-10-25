@@ -4,14 +4,17 @@ VENV_PYTHON := $(VENV_DIR)/bin/python
 VENV_PIP := $(VENV_PYTHON) -m pip
 VENV_AUTH := $(VENV_DIR)/bin/telegram-proxy-auth
 
-.PHONY: venv install test test-e2e auth run pre-commit-install clean-venv
+.PHONY: venv install check test test-e2e auth run pre-commit-install clean-venv
 
 venv:
 	test -d $(VENV_DIR) || $(PYTHON) -m venv $(VENV_DIR)
 	$(VENV_PIP) install --upgrade pip
 
 install: venv
-	$(VENV_PIP) install -e '.[dev]'
+	$(VENV_PIP) install -c requirements.lock -e '.[dev]' -e ./cli
+
+check:
+	$(VENV_PYTHON) scripts/check.py
 
 test: install
 	$(VENV_PYTHON) -m pytest -m "not e2e"

@@ -11,7 +11,6 @@ from telegram_proxy_api.serializers import (
     serialize_message_summary,
     unique_archive_name,
 )
-
 from tests.conftest import (
     make_chat,
     make_dialog,

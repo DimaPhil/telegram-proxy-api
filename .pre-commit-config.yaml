@@ -1,8 +1,8 @@
 repos:
   - repo: local
     hooks:
-      - id: pytest-read-suite
-        name: pytest read suite
-        entry: .venv/bin/pytest -m "not e2e"
+      - id: project-check
+        name: API and CLI checks
+        entry: .venv/bin/python scripts/check.py
         language: system
         pass_filenames: false

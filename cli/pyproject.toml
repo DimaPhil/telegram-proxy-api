@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-proxy-cli"
+version = "0.1.0"
+description = "Agent-friendly client for the Telegram Proxy API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["httpx>=0.28.1,<1"]
+
+[project.scripts]
+tg = "telegram_proxy_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+telegram_proxy_cli = ["openapi.json", "skills/tg/SKILL.md", "skills/tg/source.json", "py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=telegram_proxy_cli --cov-branch --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]

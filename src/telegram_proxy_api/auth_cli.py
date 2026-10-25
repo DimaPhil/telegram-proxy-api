@@ -17,9 +17,7 @@ async def _authenticate() -> None:
     try:
         settings.telegram_session_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise SystemExit(
-            f"Cannot create Telegram session directory '{settings.telegram_session_dir}': {exc}"
-        ) from exc
+        raise SystemExit(f"Cannot create Telegram session directory '{settings.telegram_session_dir}': {exc}") from exc
 
     if normalize_string_session(settings.telegram_session_string, settings.session_path):
         print(f"Stored session string in {settings.session_file_path}")

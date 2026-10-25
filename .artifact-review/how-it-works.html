@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telegram Proxy + tg · How it works</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f4ef;--panel:#fff;--ink:#172b35;--muted:#51636c;--line:#d6dedf;--accent:#086d91;--soft:#e5f3f7;--green:#22684d;--warn:#fff4de;--gold:#835213}
+@media(prefers-color-scheme:dark){:root{--bg:#101c24;--panel:#172833;--ink:#e5edf0;--muted:#aec0ca;--line:#344b58;--accent:#83d7f5;--soft:#203c4a;--green:#99d9b7;--warn:#352d20;--gold:#f4c57e}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,sans-serif}main,nav{max-width:1100px;margin:auto;padding:0 28px}nav{display:flex;flex-wrap:wrap;gap:20px;padding-top:20px;padding-bottom:20px;border-bottom:1px solid var(--line);font-size:13px}nav strong{margin-right:auto}a{color:var(--accent);text-underline-offset:4px}nav a{text-decoration:none}header{padding:60px 0 34px}.eyebrow,.label{color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.13em;text-transform:uppercase}h1{font-size:clamp(36px,6vw,64px);line-height:1.07;letter-spacing:-.045em;margin:14px 0 22px}h2{font-size:28px;letter-spacing:-.025em;line-height:1.2;margin:0 0 12px}h3{font-size:18px;line-height:1.3;margin:0 0 10px}p{margin:0 0 14px}.lead{font-size:20px;max-width:790px;color:var(--muted)}.small,figcaption{font-size:13px;color:var(--muted)}.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}.chip{border:1px solid var(--line);border-radius:20px;font-size:12px;padding:4px 11px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.thirds{grid-template-columns:repeat(3,minmax(0,1fr))}.grid>*{min-width:0}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:23px}.card p:last-child{margin-bottom:0}section{border-top:1px solid var(--line);padding:36px 0;scroll-margin-top:24px}.intro{max-width:790px;color:var(--muted);margin-bottom:23px}.note{background:var(--soft);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding:17px 21px}.warning{background:var(--warn);border-color:var(--gold)}figure{margin:22px 0;padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:14px}.diagram-scroll{overflow:auto}svg{display:block;width:100%;min-width:650px;height:auto;color:var(--ink)}svg .box{fill:var(--soft);stroke:var(--line)}svg .edge{stroke:var(--accent);stroke-width:2;fill:none}svg text{fill:currentColor;font:17px system-ui,sans-serif}svg .sub{font-size:13px;fill:var(--muted)}figcaption{padding:12px 0 0}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;background:var(--panel);font-size:14px}th,td{padding:14px 18px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{background:var(--soft);font-size:12px;letter-spacing:.05em;text-transform:uppercase}tr:last-child td{border:0}td:first-child{width:30%}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.88em}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;border-radius:10px;background:var(--soft);margin:14px 0}details{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:0 20px;margin-top:12px}summary{font-weight:650;cursor:pointer;padding:16px 0}details>div{padding-bottom:18px}ul,ol{padding-left:23px}li{margin:7px 0}.controls{display:grid;grid-template-columns:1fr 1fr;gap:16px}label{display:block;font-weight:650;font-size:14px}select{display:block;width:100%;padding:12px;margin:7px 0 16px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--panel);font:inherit}.result{background:var(--soft);padding:21px;border-radius:10px}.result strong{display:block;font-size:23px;color:var(--accent);margin:4px 0}.steps{counter-reset:step}.step{position:relative;padding-left:50px;margin:25px 0}.step:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--accent);font-weight:750}p,li,th,td{overflow-wrap:anywhere}:focus-visible{outline:3px solid var(--accent);outline-offset:4px}footer{padding:28px 0 50px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}@media(max-width:700px){main,nav{padding-left:18px;padding-right:18px}nav strong{width:100%}header{padding-top:36px}.grid,.thirds,.controls{grid-template-columns:1fr}figure{padding:12px}th,td{padding:12px}h2{font-size:25px}.lead{font-size:18px}}@media print{nav,.explorer{display:none}body{background:white;color:#172b35;font-size:10pt}.card,figure,table{background:white}header{padding-top:12px}section{break-inside:avoid}svg{min-width:0}a{color:inherit}details{break-inside:avoid}}
+</style>
+</head>
+<body>
+<nav aria-label="Guide sections"><strong>telegram-proxy-api / field guide</strong><a href="#architecture">Architecture</a><a href="#routing">Routing</a><a href="#install">Use tg</a><a href="#delivery">Delivery</a><a href="#maintain">Maintain</a></nav>
+<main>
+<header>
+<div class="eyebrow">Implementation walkthrough</div>
+<h1>One Telegram API.<br>A small CLI for agents.</h1>
+<p class="lead"><code>tg</code> calls your deployed API. The server chooses between your personal Telegram session and a verified Bot cache. Agents get one consistent interface for reading chats, messages and files.</p>
+<div class="chips"><span class="chip">Read-only</span><span class="chip">One account · one service process</span><span class="chip">API + CLI release together</span><span class="chip">Offline HTML · no external assets</span></div>
+<p class="note small" style="margin-top:24px"><strong>Implementation snapshot:</strong> source at <code>d6366d8</code>, PR #1. This describes built behavior, not a live deployment. Bot mode defaults to <code>off</code>; merge, release and deployment status must be checked separately.</p>
+</header>
+
+<section id="architecture">
+<div class="label">01 / The boundary</div><h2>Your machine is just a client</h2>
+<p class="intro">Telegram sessions, Bot credentials and the encrypted cache stay on the server. The CLI needs only the API URL and API bearer token.</p>
+<figure>
+<div class="diagram-scroll" tabindex="0" aria-label="Architecture diagram; scroll horizontally on small screens">
+<svg viewBox="0 0 960 310" role="img" aria-labelledby="architecture-title architecture-desc">
+<title id="architecture-title">CLI to API to Telegram providers</title><desc id="architecture-desc">An agent uses tg on its machine. tg sends HTTPS with an API token to FastAPI. The server gateway selects either Telethon's personal account session or the Bot API and encrypted cache. Server secrets never enter the CLI.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+<g id="client-region"><title>Client machine</title><text x="22" y="28" class="sub">CLIENT MACHINE</text><rect class="box" x="20" y="108" width="185" height="90" rx="12"/><text x="112" y="143" text-anchor="middle">Agent → tg</text><text x="112" y="169" text-anchor="middle" class="sub">API URL + bearer token</text></g>
+<path id="http-edge" class="edge" d="M205 153H298" marker-end="url(#arrow)"><title>Authenticated HTTPS request</title></path><text x="250" y="132" class="sub" text-anchor="middle">HTTPS</text>
+<g id="server-gateway"><title>Server API and capability router</title><text x="310" y="28" class="sub">YOUR SERVER</text><rect class="box" x="310" y="108" width="250" height="90" rx="12"/><text x="435" y="143" text-anchor="middle">FastAPI → gateway</text><text x="435" y="169" text-anchor="middle" class="sub">preserved REST contract</text></g>
+<path id="telethon-edge" class="edge" d="M560 135H610V83H650" marker-end="url(#arrow)"><title>History and personal account capabilities use Telethon</title></path>
+<path id="bot-edge" class="edge" d="M560 170H610V232H650" marker-end="url(#arrow)"><title>Eligible observed messages and metadata can use the Bot provider</title></path>
+<g id="telethon-node"><title>Telethon uses the personal account's Telegram session</title><rect class="box" x="662" y="42" width="275" height="83" rx="12"/><text x="800" y="75" text-anchor="middle">Telethon / MTProto</text><text x="800" y="101" text-anchor="middle" class="sub">personal account · history</text></g>
+<g id="bot-node"><title>Bot HTTP API and encrypted Business or Secretary cache</title><rect class="box" x="662" y="190" width="275" height="83" rx="12"/><text x="800" y="222" text-anchor="middle">Bot API + encrypted cache</text><text x="800" y="248" text-anchor="middle" class="sub">verified connection · observed data</text></g>
+</svg></div>
+<figcaption>Same response models regardless of provider. JSON includes <code>meta.provider</code> and <code>meta.fallback_used</code>; downloads expose equivalent headers.</figcaption>
+</figure>
+<div class="grid"><article class="card"><h3>Why keep Telethon?</h3><p>The service reads a personal account. Contacts, dialogs, old messages, search and complete albums still need that account’s session.</p></article><article class="card"><h3>What does the Bot add?</h3><p>Supported metadata and exact private messages observed through a verified Business/Secretary connection. Its cache is a partial live view, never a full history.</p></article></div>
+</section>
+
+<section id="routing">
+<div class="label">02 / Choosing a provider</div><h2>Capability first. Safe fallback second.</h2>
+<div class="grid thirds"><article class="card"><h3>off</h3><p>Telethon only. No Bot polling. Default configuration and rollback switch.</p></article><article class="card"><h3>shadow</h3><p>Validate and collect Bot updates. All public reads still use Telethon.</p></article><article class="card"><h3>primary</h3><p>Prefer Bot-supported reads when identity and cache freshness checks pass.</p></article></div>
+<div class="card explorer" style="margin-top:18px">
+<h3>Try a routing example</h3><p class="small">Illustration only. No network requests. Assumes primary-ready Bot state unless the scenario says otherwise.</p>
+<div class="controls"><label for="mode">Mode<select id="mode"><option value="primary">primary</option><option value="shadow">shadow</option><option value="off">off</option></select></label><label for="scenario">Request / condition<select id="scenario"><option value="message">Exact private message · cache hit</option><option value="miss">Exact private message · cache miss</option><option value="history">History, search or context</option><option value="metadata">Group/channel metadata</option><option value="album">Album or ZIP bundle</option><option value="large">Cached file · over hosted size limit</option><option value="gap">Eligible message · poller recovering</option><option value="auth">Eligible read · Bot token rejected</option><option value="rate">Eligible read · Bot cooldown</option></select></label></div>
+<div class="result" aria-live="polite"><span class="label">Selected route</span><strong id="route">Bot cache</strong><p id="reason">Return the exact observed private message from the verified connection.</p></div>
+</div>
+<div class="table-wrap" style="margin-top:22px"><table><caption class="small" style="padding:12px">Primary-mode routing at a glance</caption><thead><tr><th scope="col">Read</th><th scope="col">Preferred route</th><th scope="col">Constraint</th></tr></thead><tbody>
+<tr><td>Identity, contacts, dialogs</td><td>Telethon</td><td>Preserve personal-account meaning.</td></tr>
+<tr><td>History, search, context</td><td>Telethon</td><td>Never present partial cache data as complete history.</td></tr>
+<tr><td>Group/channel metadata</td><td>Bot → permitted fallback</td><td>Negative IDs or usernames; private metadata uses Telethon.</td></tr>
+<tr><td>Exact private message</td><td>Verified cache → permitted fallback</td><td>Positive numeric chat ID and matching connection.</td></tr>
+<tr><td>Single-message media</td><td>Verified cache / Bot file stream</td><td>No album expansion; known hosted files over 20 MiB use Telethon.</td></tr>
+<tr><td>Albums and bundles</td><td>Telethon</td><td>Cache completeness cannot be assumed.</td></tr>
+</tbody></table></div>
+<p class="note" style="margin-top:18px"><strong>Fallback has limits.</strong> A cache miss or eligible timeout can fall back once. Bot 401, 429 and owner mismatch cannot be hidden by switching providers. Telethon-only operations remain independent.</p>
+</section>
+
+<section id="cache">
+<div class="label">03 / Keeping cached data trustworthy</div><h2>Store first. Acknowledge afterward.</h2>
+<p class="intro">The poller receives Business/Secretary updates, verifies which owner and connection they belong to, then commits the entire batch and its next cursor together. Only the next poll acknowledges that committed cursor.</p>
+<div class="grid">
+<article class="card"><h3>Identity + privacy</h3><ul><li>Ordinary conversations with the bot never become personal-account messages.</li><li>AES-GCM encrypts records; HMAC hides lookup identifiers.</li><li>The root key is separate from SQLite. Default retention is 30 days.</li></ul></article>
+<article class="card"><h3>Freshness + revocation</h3><ul><li>Failed polling disables cached reads until catch-up.</li><li>Connection edits/disable clear messages; 24-hour polling gaps clear stale data.</li><li>A week without updates resets ordering safely for Telegram’s possible ID reset.</li></ul></article>
+</div>
+<details><summary>What happens during a download?</summary><div><p>The gateway selects a cached message, preflights its file, then rechecks the live record and provider state after each await. Deletion, edits, revocation or a concurrent 401/429 can invalidate it before response headers. Invalidated streams are closed.</p><p>After streaming begins, an upstream failure aborts the transfer and updates health. It cannot start a second provider response. Cleanup also runs if the client leaves before the first byte.</p></div></details>
+</section>
+
+<section id="install">
+<div class="label">04 / Agent workflow</div><h2>Install → log in → discover → read</h2>
+<div class="grid"><article class="card"><h3>On the client machine</h3><pre>python3 install-tg.py
+tg login --url https://your-api.example
+tg auth-status --remote
+tg operations list
+tg chats list
+tg messages search --query "meeting"
+tg messages get --chat-id 123456 --message-id 42</pre><p class="small">Download <code>install-tg.py</code> from a published GitHub release. Requires Python 3.12+ on macOS/Linux. The URL above is a placeholder.</p></article><article class="card"><h3>What gets installed?</h3><ul><li>Isolated CLI environment and <code>~/.local/bin/tg</code>.</li><li>Managed skill at <code>~/.agents/skills/tg</code> and a Claude compatibility link.</li><li>Bash, Zsh and Fish completions, generated from the command parser.</li></ul><p>Open a new shell and ensure <code>~/.local/bin</code> is on PATH. Unrelated files are preserved; setup conflicts produce warnings.</p></article></div>
+<details><summary>Credentials, downloads and direct pip installs</summary><div><p><code>tg login</code> prompts privately for the API token and saves URL-bound credentials with mode 0600. Automation can use <code>TG_API_URL</code> and <code>TG_API_TOKEN</code>, or <code>--token-stdin</code>. Never paste secrets into agent chat. Redirects and automatic retries are disabled.</p><pre>tg media list --chat-id 123456 --message-id 42
+tg media download --chat-id 123456 --message-id 42 \
+  --media-id 42:0 --output ./download.bin</pre><p>Use IDs returned by the API. Downloads require an explicit file and preserve existing files unless <code>--overwrite</code> is supplied. JSON goes to stdout, errors to stderr.</p><p>Python wheels have no standard postinstall hook. Direct pip/wheel installations require <code>tg skill install</code> and <code>tg completion install</code>. The release installer runs both automatically. For managed dotfiles use <code>tg completion install --no-shell-init</code> and integrate through the configuration manager.</p></div></details>
+</section>
+
+<section id="delivery">
+<div class="label">05 / Keeping the pieces aligned</div><h2>One contract. One release version.</h2>
+<div class="grid"><article class="card"><h3>API → CLI contract</h3><p>FastAPI generates OpenAPI. A checked snapshot ships inside the CLI. Commands use its parameter types; a reviewed mapping supplies friendly names.</p><p>CI rejects a stale snapshot, uncovered endpoint, duplicate operation ID or unsupported contract shape. Completion uses the same parser. Update the bundled skill alongside user-facing changes.</p></article><article class="card"><h3>Main → GitHub release</h3><p>Successful main-push CI triggers paired API/CLI builds. Automatic versions increment <code>x.(y+1).0</code>; the workflow UI also accepts a higher explicit <code>X.Y.Z</code>.</p><p>Both wheels and source packages ship with checksums and the installer. Builds stamp versions without committing a bump. Retry-safe publication can resume interrupted drafts.</p></article></div>
+<p class="note" style="margin-top:18px"><strong>Release is not deployment.</strong> Publishing makes installable artifacts available. Starting/upgrading the API and enabling Bot collection remain separate operator actions.</p>
+<div class="steps"><div class="step"><h3>Change</h3><p>Typed routes + DTOs + tests; update CLI mappings and agent examples when needed.</p></div><div class="step"><h3>Regenerate and check</h3><pre>.venv/bin/python scripts/export_openapi.py
+make check</pre><p class="small">Ruff, strict typing, schema parity and both test suites. Each package has an 80% coverage floor. Locked dependencies align local, Docker, CI and release environments.</p></div><div class="step"><h3>Review, merge, release</h3><p>PR checks validate Python 3.12/3.14, all completion shells and Docker. After an authorized merge, successful main CI triggers publication. Installer smoke testing uses the actual built wheel.</p></div></div>
+</section>
+
+<section id="maintain">
+<div class="label">06 / Future sessions</div><h2>Where an agent should start</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Need</th><th scope="col">Read / inspect</th></tr></thead><tbody>
+<tr><td>Repository rules + deep context</td><td><code>AGENTS.md</code> → <code>docs/AGENT_CONTEXT.md</code></td></tr>
+<tr><td>Routing and lifecycle</td><td><code>src/telegram_proxy_api/gateway.py</code> and <code>tests/test_hybrid_gateway.py</code></td></tr>
+<tr><td>Encryption, updates, transport</td><td><code>bot_store.py</code>, <code>bot_client.py</code> and their tests</td></tr>
+<tr><td>CLI implementation</td><td><code>cli/AGENTS.md</code> → <code>catalog.py</code>, <code>main.py</code>, <code>client.py</code></td></tr>
+<tr><td>Installed agent instructions</td><td><code>cli/src/telegram_proxy_cli/skills/tg/SKILL.md</code></td></tr>
+<tr><td>Releases and installation</td><td><code>.github/workflows/release.yml</code>, <code>scripts/release.py</code>, <code>scripts/install-tg.py</code></td></tr>
+</tbody></table></div>
+<p class="note warning" style="margin-top:18px"><strong>Operational boundaries:</strong> one process, one poller, one session owner. Keep Bot mode off until the owner approves the disclosed use under Telegram’s current terms. Real-account tests require explicit configuration and exclusive session ownership. Code/tests do not establish live acceptance.</p>
+<details><summary>Operator activation checklist</summary><div><ol><li>Protect a non-local API with bearer authentication.</li><li>Configure server Bot token, matching owner ID and a separate random 32-byte cache key.</li><li>Start shadow mode, enable Secretary Mode and connect the owner’s selected chats. A fresh reconnect may be needed to discover the connection.</li><li>Inspect the health body: both providers healthy, poller running, connection verified. HTTP 200 alone is not readiness proof.</li><li>Deliberately switch to primary after validation. Switch to off to roll back. Never run two pollers or reuse the session concurrently.</li></ol><p>Existing webhooks require an operator decision; startup never deletes them. Cache key rotation must preserve the separate Telethon session.</p></div></details>
+</section>
+<footer>Source-based guide to the implementation in <a href="https://github.com/DimaPhil/telegram-proxy-api/pull/1">PR #1</a>. Architecture snapshot: <code>d6366d8</code>. No live API calls or third-party resources are loaded by this page. Source and current tests remain authoritative.</footer>
+</main>
+<script>
+const examples={message:['Bot cache','Return the exact observed private message from the verified connection.'],miss:['Telethon · fallback','A cache miss is not a 404. Ask the personal-account provider once.'],history:['Telethon · direct','Full history, search and context require the personal-account provider.'],metadata:['Bot API','Use getChat for eligible group/channel metadata. Current implementation also requires a verified connection and caught-up poller.'],album:['Telethon · direct','The update cache cannot prove album completeness.'],large:['Telethon · fallback','A cached file known to exceed the hosted 20 MiB limit skips the impossible Bot download.'],gap:['Telethon · fallback','Cache reads remain disabled until pending updates are drained. This assumes a recoverable polling failure, not 401/429.'],auth:['503 · no fallback','The Bot token was rejected. Do not hide the authentication failure by switching providers.'],rate:['429 · no fallback','Respect Retry-After. Do not evade the Bot cooldown through Telethon.']};
+function renderRoute(){const mode=document.getElementById('mode').value;const scenario=document.getElementById('scenario').value;const answer=mode==='primary'?examples[scenario]:['Telethon · direct',mode==='off'?'Bot mode is off: no Bot polling or routing.':'Shadow mode collects verified updates but all public reads still use Telethon.'];document.getElementById('route').textContent=answer[0];document.getElementById('reason').textContent=answer[1];}
+document.getElementById('mode').addEventListener('change',renderRoute);document.getElementById('scenario').addEventListener('change',renderRoute);renderRoute();
+</script>
+</body>
+</html>
