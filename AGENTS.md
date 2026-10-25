@@ -1,5 +1,12 @@
 # Repository instructions
 
+## Start here
+
+- Read [the maintainer guide](docs/AGENT_CONTEXT.md) for the source map, routing rules, failure cases, validation and release/install procedure. Use [the HTML walkthrough](.artifact-review/how-it-works.html) for the visual overview and [README.md](README.md) for operator setup.
+- Treat source and tests as authoritative. `TELEGRAM_BOT_API_INTEGRATION_TECH_SPEC.md` is the original design snapshot; it is not proof of current Telegram capabilities, deployed configuration or release status.
+- Before resuming delivery, inspect `git status`, the current branch and current PR/check state. Do not infer merge, release, deployment, live authorization or active Bot mode from earlier test results.
+- Keep the maintainer guide and HTML walkthrough consistent when changing architecture, routing, installation or release behavior. CLI-specific contributor instructions live in [cli/AGENTS.md](cli/AGENTS.md); the installed consumer skill is a separate artifact.
+
 ## Architecture
 
 - This is a read-only personal Telegram API with an independently installable `tg` HTTP client in `cli/`. Keep CLI code free of server imports, Telethon, session files, Bot tokens and cache access. Shared contracts travel through the generated OpenAPI document.

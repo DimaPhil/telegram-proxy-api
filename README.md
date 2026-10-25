@@ -2,6 +2,8 @@
 
 Read-only Telegram data proxy with FastAPI, Telethon and an optional official Bot API provider. The independently installed `tg` CLI calls the deployed HTTP API and provides JSON-first access for agents. Both packages release together.
 
+See the [self-contained HTML walkthrough](.artifact-review/how-it-works.html) for architecture, routing, installation and releases. Future contributors should start with [AGENTS.md](AGENTS.md) and the [maintainer context](docs/AGENT_CONTEXT.md).
+
 ## Features
 
 - FastAPI REST API with OpenAPI at `/openapi.json`, `/schema/openapi.json`, and `/schema/openapi.yaml`
