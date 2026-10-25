@@ -98,7 +98,7 @@ def infer_peer_type(entity: Any) -> str:
     return "chat"
 
 
-def display_name(entity: Any) -> str:
+def display_name(entity: Any) -> str | None:
     if entity is None:
         return "Unknown"
     if isinstance(entity, (types.PeerUser, types.PeerChat, types.PeerChannel)):
@@ -163,7 +163,7 @@ def serialize_chat_summary(dialog: Any) -> ChatSummary:
     entity = getattr(dialog, "entity", dialog)
     return ChatSummary(
         id=peer_id_as_str(entity),
-        title=display_name(entity),
+        title=display_name(entity) or "Unknown",
         username=getattr(entity, "username", None),
         type=infer_peer_type(entity),
         unread_count=getattr(dialog, "unread_count", 0) or 0,
@@ -176,7 +176,7 @@ def serialize_chat_summary(dialog: Any) -> ChatSummary:
 def serialize_chat_detail(entity: Any, *, about: str | None = None) -> ChatDetail:
     return ChatDetail(
         id=peer_id_as_str(entity),
-        title=display_name(entity),
+        title=display_name(entity) or "Unknown",
         username=getattr(entity, "username", None),
         type=infer_peer_type(entity),
         unread_count=0,
@@ -191,7 +191,7 @@ def serialize_chat_detail(entity: Any, *, about: str | None = None) -> ChatDetai
 def serialize_contact(entity: Any) -> ContactSummary:
     return ContactSummary(
         id=peer_id_as_str(entity),
-        display_name=display_name(entity),
+        display_name=display_name(entity) or "Unknown",
         username=getattr(entity, "username", None),
         phone=getattr(entity, "phone", None),
         mutual_contact=getattr(entity, "mutual_contact", None),

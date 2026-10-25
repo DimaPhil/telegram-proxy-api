@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from telethon.tl import types
 
@@ -11,8 +9,7 @@ from telegram_proxy_api.errors import (
     ResourceNotFoundError,
     TelegramFloodWaitError,
 )
-from telegram_proxy_api.gateway import TelegramGateway
-
+from telegram_proxy_api.gateway import TelethonGateway as TelegramGateway
 from tests.conftest import (
     make_chat,
     make_dialog,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from importlib.metadata import version
+from typing import Any, AsyncIterator
 from urllib.parse import quote
 
 import yaml
@@ -23,9 +25,8 @@ from .models import (
     MessageSummary,
     ProblemDetail,
     ResolveResult,
-    ResponseMeta,
 )
-from .responses import api_response
+from .responses import ClosingStreamingResponse, api_response
 
 
 def build_content_disposition(file_name: str) -> str:
@@ -46,18 +47,20 @@ def create_app(
     app_gateway = gateway or TelegramGateway(app_settings)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = app_settings
         app.state.gateway = app_gateway
         if managed_gateway:
             await app_gateway.start()
-        yield
-        if managed_gateway:
-            await app_gateway.stop()
+        try:
+            yield
+        finally:
+            if managed_gateway:
+                await app_gateway.stop()
 
     app = FastAPI(
         title=app_settings.app_name,
-        version="0.1.0",
+        version=version("telegram-proxy-api"),
         lifespan=lifespan,
         dependencies=[Depends(require_access_token)],
     )
@@ -76,57 +79,58 @@ def create_app(
             headers=exc.headers,
         )
 
-    @app.get("/healthz", response_model=ApiResponse[HealthStatus])
+    @app.get("/healthz", operation_id="health", response_model=ApiResponse[HealthStatus])
     async def healthz(gateway: TelegramGateway = Depends(get_gateway)) -> ApiResponse[HealthStatus]:
         return api_response(gateway.health_status())
 
-    @app.get("/me", response_model=ApiResponse[ContactSummary])
+    @app.get("/me", operation_id="me", response_model=ApiResponse[ContactSummary])
     async def get_me(gateway: TelegramGateway = Depends(get_gateway)) -> ApiResponse[ContactSummary]:
         return api_response(await gateway.get_me())
 
-    @app.get("/contacts", response_model=ApiResponse[list[ContactSummary]])
+    @app.get("/contacts", operation_id="contacts_list", response_model=ApiResponse[list[ContactSummary]])
     async def get_contacts(
         page: int = 1,
         page_size: int = 25,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[ContactSummary]]:
-        data, meta = await gateway.list_contacts(page=page, page_size=page_size)
-        return api_response(data, meta=meta)
+        return api_response(await gateway.list_contacts(page=page, page_size=page_size))
 
-    @app.get("/resolve", response_model=ApiResponse[ResolveResult])
+    @app.get("/resolve", operation_id="resolve", response_model=ApiResponse[ResolveResult])
     async def resolve_peer(
         value: str,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[ResolveResult]:
         return api_response(await gateway.resolve(value))
 
-    @app.get("/chats", response_model=ApiResponse[list[ChatSummary]])
+    @app.get("/chats", operation_id="chats_list", response_model=ApiResponse[list[ChatSummary]])
     async def get_chats(
         page: int = 1,
         page_size: int = 25,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[ChatSummary]]:
-        data, meta = await gateway.list_chats(page=page, page_size=page_size)
-        return api_response(data, meta=meta)
+        return api_response(await gateway.list_chats(page=page, page_size=page_size))
 
-    @app.get("/chats/{chat_id}", response_model=ApiResponse[ChatDetail])
+    @app.get("/chats/{chat_id}", operation_id="chats_get", response_model=ApiResponse[ChatDetail])
     async def get_chat(
         chat_id: str,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[ChatDetail]:
         return api_response(await gateway.get_chat(chat_id))
 
-    @app.get("/chats/{chat_id}/messages", response_model=ApiResponse[list[MessageSummary]])
+    @app.get(
+        "/chats/{chat_id}/messages", operation_id="messages_list", response_model=ApiResponse[list[MessageSummary]]
+    )
     async def get_messages(
         chat_id: str,
         page: int = 1,
         page_size: int = 25,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[MessageSummary]]:
-        data, meta = await gateway.list_messages(chat_ref=chat_id, page=page, page_size=page_size)
-        return api_response(data, meta=meta)
+        return api_response(await gateway.list_messages(chat_ref=chat_id, page=page, page_size=page_size))
 
-    @app.get("/chats/{chat_id}/messages/{message_id}", response_model=ApiResponse[MessageDetail])
+    @app.get(
+        "/chats/{chat_id}/messages/{message_id}", operation_id="messages_get", response_model=ApiResponse[MessageDetail]
+    )
     async def get_message(
         chat_id: str,
         message_id: int,
@@ -136,6 +140,7 @@ def create_app(
 
     @app.get(
         "/chats/{chat_id}/messages/{message_id}/context",
+        operation_id="messages_context",
         response_model=ApiResponse[MessageContext],
     )
     async def get_message_context(
@@ -149,9 +154,9 @@ def create_app(
             message_id=message_id,
             context_size=context_size,
         )
-        return api_response(data, meta=ResponseMeta(context_size=context_size))
+        return api_response(data)
 
-    @app.get("/messages/search", response_model=ApiResponse[list[MessageSummary]])
+    @app.get("/messages/search", operation_id="messages_search", response_model=ApiResponse[list[MessageSummary]])
     async def search_messages(
         query: str,
         chat_id: str | None = None,
@@ -159,29 +164,38 @@ def create_app(
         page_size: int = 25,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[MessageSummary]]:
-        data, meta = await gateway.search_messages(
+        data = await gateway.search_messages(
             query=query,
             chat_ref=chat_id,
             page=page,
             page_size=page_size,
         )
-        return api_response(data, meta=meta)
+        return api_response(data)
 
-    @app.get("/chats/{chat_id}/messages/{message_id}/media", response_model=ApiResponse[list[MediaItem]])
+    @app.get(
+        "/chats/{chat_id}/messages/{message_id}/media",
+        operation_id="media_list",
+        response_model=ApiResponse[list[MediaItem]],
+    )
     async def get_message_media(
         chat_id: str,
         message_id: int,
         include_album: bool = False,
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[MediaItem]]:
-        data, meta = await gateway.get_message_media(
+        data = await gateway.get_message_media(
             chat_ref=chat_id,
             message_id=message_id,
             include_album=include_album,
         )
-        return api_response(data, meta=meta)
+        return api_response(data)
 
-    @app.get("/chats/{chat_id}/messages/{message_id}/media/bundle")
+    @app.get(
+        "/chats/{chat_id}/messages/{message_id}/media/bundle",
+        operation_id="media_bundle",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}}},
+    )
     async def bundle_message_media(
         chat_id: str,
         message_id: int,
@@ -196,6 +210,8 @@ def create_app(
         headers = {
             "Content-Disposition": build_content_disposition(bundle.file_name),
             "Content-Length": str(len(bundle.content)),
+            "X-Telegram-Provider": bundle.provider,
+            "X-Telegram-Fallback": str(bundle.fallback_used).lower(),
         }
         return StreamingResponse(
             iter([bundle.content]),
@@ -203,7 +219,12 @@ def create_app(
             headers=headers,
         )
 
-    @app.get("/chats/{chat_id}/messages/{message_id}/media/{media_id}")
+    @app.get(
+        "/chats/{chat_id}/messages/{message_id}/media/{media_id}",
+        operation_id="media_download",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}},
+    )
     async def stream_message_media(
         chat_id: str,
         message_id: int,
@@ -215,13 +236,17 @@ def create_app(
             message_id=message_id,
             media_id=media_id,
         )
-        headers = {"Content-Disposition": build_content_disposition(stream.file_name)}
+        headers = {
+            "Content-Disposition": build_content_disposition(stream.file_name),
+            "X-Telegram-Provider": stream.provider,
+            "X-Telegram-Fallback": str(stream.fallback_used).lower(),
+        }
         if stream.size_bytes is not None:
             headers["Content-Length"] = str(stream.size_bytes)
-        return StreamingResponse(stream.chunks, media_type=stream.content_type, headers=headers)
+        return ClosingStreamingResponse(stream.chunks, media_type=stream.content_type, headers=headers)
 
     @app.get("/schema/openapi.json", include_in_schema=False)
-    async def explicit_openapi_json() -> dict:
+    async def explicit_openapi_json() -> dict[str, Any]:
         return app.openapi()
 
     @app.get("/schema/openapi.yaml", include_in_schema=False)
