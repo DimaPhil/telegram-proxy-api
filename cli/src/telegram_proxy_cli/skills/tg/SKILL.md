@@ -1,6 +1,6 @@
 ---
 name: tg
-description: Read Telegram chats, contacts, message history, search results, message context, and media through the deployed Telegram Proxy API using tg. Use for personal-account Telegram reading and downloads, not bot creation, sending messages, or operating a Telegram desktop UI.
+description: Read Telegram chats, contacts, message history, search results, message context, and media through the deployed Telegram Proxy API using tg, including one person's messages over a date range and the chats shared with them. Use for personal-account Telegram reading, exports, and downloads, not bot creation, sending messages, or operating a Telegram desktop UI.
 ---
 
 # Telegram Proxy CLI
@@ -25,7 +25,21 @@ tg messages get --chat-id 123456 --message-id 42
 tg messages context --chat-id 123456 --message-id 42 --context-size 5
 tg messages search --query "meeting notes" --chat-id 123456
 tg media list --chat-id 123456 --message-id 42 --include-album false
+tg users common-chats --user-id 987654
 ```
+
+## One person's messages or a date range
+
+Filter on the server instead of reading whole histories. `messages list` and `messages search` accept `--from-user` (numeric ID or `@username`), `--since` (inclusive), `--until` (exclusive) and `--before-id`; ISO 8601 times without an offset are UTC. Add `--include-raw false` when only the summary fields are needed: `telegram_raw` dominates response size. Resolve the username to its stable numeric ID first, then list the groups shared with that user.
+
+```bash
+tg resolve --value @someone
+tg users common-chats --user-id 987654
+tg messages list --chat-id=-1001234567890 --from-user 987654 --since 2026-05-01T00:00:00Z --page-size 100 --include-raw false
+tg messages list --chat-id=-1001234567890 --from-user 987654 --since 2026-05-01T00:00:00Z --page-size 100 --include-raw false --before-id 5120
+```
+
+Filtered queries paginate by cursor: repeat the same request with `--before-id` set to `meta.next_before_id` until it is null, and keep `--page` at 1. The cursor stays stable while new messages arrive; deduplicate by message ID anyway. A private chat with the user is their numeric user ID and is not part of `common-chats`. `common-chats` lists only groups both accounts currently belong to, so chats the person has left must be given explicitly. `--from-user` on search requires `--chat-id`; there is no cross-chat sender query.
 
 For an operation without a friendly command, use `tg operations call OPERATION_ID --params '{"parameter":"value"}'`. Parameters must have the JSON types shown by `describe`; integers and booleans must not be quoted. Only use `--body JSON` when the operation declares a request body.
 

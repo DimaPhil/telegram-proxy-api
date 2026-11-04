@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-import pytest
-from telethon.tl import types
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import pytest
+from telethon import utils
+from telethon.tl import types
+from telethon.tl.functions.messages import GetCommonChatsRequest
+
+from telegram_proxy_api import gateway as gateway_module
 from telegram_proxy_api.errors import (
     AuthenticationRequiredError,
     BadRequestError,
     ResourceNotFoundError,
     TelegramFloodWaitError,
 )
+from telegram_proxy_api.gateway import MessageFilter
 from telegram_proxy_api.gateway import TelethonGateway as TelegramGateway
 from tests.conftest import (
     make_chat,
@@ -38,6 +45,10 @@ class FakeClient:
         self.history_messages = []
         self.contacts_result = FakeContactsResult([])
         self.get_input_entity_calls = 0
+        self.iter_calls: list[dict[str, object]] = []
+        self.yielded = 0
+        self.common_chats = []
+        self.common_chats_max_ids: list[int] = []
 
     async def connect(self):
         self.connected = True
@@ -78,7 +89,45 @@ class FakeClient:
             return self.range_messages[: limit or len(self.range_messages)]
         return self.history_messages[add_offset : add_offset + (limit or len(self.history_messages))]
 
+    async def iter_messages(
+        self,
+        entity=None,
+        limit=None,
+        *,
+        offset_date=None,
+        offset_id=0,
+        add_offset=0,
+        search=None,
+        from_user=None,
+        wait_time=None,
+    ):
+        self.iter_calls.append(
+            {
+                "limit": limit,
+                "offset_date": offset_date,
+                "offset_id": offset_id,
+                "search": search,
+                "from_user": from_user,
+            }
+        )
+        source = self.search_messages if search is not None or entity is None else self.history_messages
+        sender_id = utils.get_peer_id(from_user) if from_user is not None else None
+        selected = [
+            message
+            for message in source
+            if (not offset_id or message.id < offset_id)
+            and (offset_date is None or message.date < offset_date)
+            and (sender_id is None or message.sender_id == sender_id)
+        ][add_offset:]
+        for message in selected if limit is None else selected[:limit]:
+            self.yielded += 1
+            yield message
+
     async def __call__(self, request):
+        if isinstance(request, GetCommonChatsRequest):
+            self.common_chats_max_ids.append(request.max_id)
+            matching = [chat for chat in self.common_chats if not request.max_id or chat.id < request.max_id]
+            return SimpleNamespace(chats=matching[: request.limit])
         return self.contacts_result
 
     async def iter_download(self, media):
@@ -224,6 +273,129 @@ async def test_search_messages_returns_results(gateway, fake_client):
 
     assert [message.id for message in messages] == ["7"]
     assert meta.page_size == 1
+
+
+AUTHOR = types.InputPeerUser(user_id=300, access_hash=1)
+
+
+def dated_message(message_id: int, *, day: int, sender_id: int):
+    message = make_message(message_id, sender_id=sender_id)
+    message.date = datetime(2026, 5, day, tzinfo=UTC)
+    return message
+
+
+@pytest.mark.asyncio
+async def test_group_sender_filter_runs_server_side_and_pages_by_cursor_until_since(gateway, fake_client):
+    fake_client.input_entities.extend([(200, make_chat(200)), (300, AUTHOR)])
+    fake_client.history_messages = [
+        dated_message(9, day=9, sender_id=300),
+        dated_message(8, day=8, sender_id=400),
+        dated_message(7, day=7, sender_id=300),
+        dated_message(6, day=6, sender_id=300),
+        dated_message(5, day=1, sender_id=300),
+    ]
+    filters = MessageFilter(from_user="300", since=datetime(2026, 5, 5))
+
+    first, first_meta = await gateway.list_messages(chat_ref="200", page=1, page_size=2, filters=filters)
+    second, second_meta = await gateway.list_messages(
+        chat_ref="200",
+        page=1,
+        page_size=2,
+        filters=MessageFilter(from_user="300", since=datetime(2026, 5, 5), before_id=first_meta.next_before_id),
+    )
+
+    assert [message.id for message in first] == ["9", "7"]
+    assert first_meta.next_before_id == 7
+    assert [message.id for message in second] == ["6"]
+    assert second_meta.next_before_id is None
+    assert fake_client.iter_calls[0]["from_user"] is AUTHOR
+    assert fake_client.iter_calls[1]["offset_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_private_sender_filter_stops_at_since_instead_of_scanning_older_history(gateway, fake_client):
+    fake_client.input_entities.append((300, AUTHOR))
+    fake_client.history_messages = [
+        dated_message(5, day=20, sender_id=1),
+        dated_message(4, day=19, sender_id=300),
+        dated_message(3, day=2, sender_id=1),
+        dated_message(2, day=1, sender_id=1),
+        dated_message(1, day=1, sender_id=1),
+    ]
+
+    messages, meta = await gateway.list_messages(
+        chat_ref="300",
+        page=1,
+        page_size=10,
+        filters=MessageFilter(from_user="300", since=datetime(2026, 5, 10, tzinfo=UTC)),
+    )
+
+    assert [message.id for message in messages] == ["4"]
+    assert meta.total == 1
+    assert fake_client.iter_calls[0]["from_user"] is None
+    assert fake_client.yielded == 3
+
+
+@pytest.mark.asyncio
+async def test_search_passes_query_and_until_bound_to_telegram(gateway, fake_client):
+    fake_client.input_entities.append((200, make_chat(200)))
+    fake_client.search_messages = [dated_message(3, day=3, sender_id=300)]
+    until = datetime(2026, 5, 4, tzinfo=UTC)
+
+    messages, meta = await gateway.search_messages(
+        query="plans", chat_ref="200", page=1, page_size=5, filters=MessageFilter(until=until)
+    )
+
+    assert [message.id for message in messages] == ["3"]
+    assert fake_client.iter_calls[0]["search"] == "plans"
+    assert fake_client.iter_calls[0]["offset_date"] == until
+
+
+@pytest.mark.asyncio
+async def test_include_raw_false_omits_message_and_forward_raw_payloads(gateway, fake_client):
+    fake_client.input_entities.append((200, make_chat(200)))
+    fake_client.history_messages = [make_message(1, fwd_from=make_forward_header(from_name="Origin"))]
+
+    messages, _ = await gateway.list_messages(chat_ref="200", page=1, page_size=5, include_raw=False)
+
+    assert messages[0].telegram_raw == {}
+    assert messages[0].forward_info is not None
+    assert messages[0].forward_info.telegram_raw == {}
+
+
+@pytest.mark.asyncio
+async def test_filtered_queries_reject_offset_pages_and_cross_chat_sender_search(gateway, fake_client):
+    fake_client.input_entities.append((200, make_chat(200)))
+
+    with pytest.raises(BadRequestError, match="page must be 1"):
+        await gateway.list_messages(chat_ref="200", page=2, page_size=5, filters=MessageFilter(from_user="300"))
+    with pytest.raises(BadRequestError, match="require chat_id"):
+        await gateway.search_messages(query=None, chat_ref=None, page=1, page_size=5, filters=MessageFilter("300"))
+    with pytest.raises(BadRequestError, match="query or from_user"):
+        await gateway.search_messages(query="  ", chat_ref="200", page=1, page_size=5)
+    with pytest.raises(BadRequestError, match="since must be earlier"):
+        MessageFilter(since=datetime(2026, 5, 2), until=datetime(2026, 5, 1))
+
+
+@pytest.mark.asyncio
+async def test_common_chats_follow_max_id_batches(gateway, fake_client, monkeypatch):
+    monkeypatch.setattr(gateway_module, "_COMMON_CHATS_BATCH", 2)
+    fake_client.input_entities.append((300, AUTHOR))
+    fake_client.common_chats = [make_chat(30, title="A"), make_chat(20, title="B"), make_chat(10, title="C")]
+
+    chats, meta = await gateway.list_common_chats(user_ref="300", page=1, page_size=25)
+
+    assert [chat.title for chat in chats] == ["A", "B", "C"]
+    assert meta.total == 3
+    assert fake_client.common_chats_max_ids == [0, 20]
+
+
+@pytest.mark.asyncio
+async def test_common_chats_reject_non_user_reference(gateway, fake_client):
+    fake_client.input_entities.append((500, types.InputPeerChannel(channel_id=500, access_hash=1)))
+
+    with pytest.raises(BadRequestError, match="must reference a user"):
+        await gateway.list_common_chats(user_ref="500", page=1, page_size=25)
 
 
 @pytest.mark.asyncio

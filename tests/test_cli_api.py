@@ -31,6 +31,7 @@ def test_cli_calls_every_api_operation(tmp_path):
             for operation in operations():
                 values = {
                     "chat_id": "100",
+                    "user_id": "42",
                     "message_id": 10,
                     "media_id": "10:0",
                     "value": "@resolved",

@@ -30,8 +30,8 @@ FastAPI delegates to `TelegramGateway`. The facade returns `GatewayResult(data, 
 
 | Operation | Route in primary mode |
 | --- | --- |
-| Owner identity, contacts, dialogs | Telethon |
-| History, search, message context | Telethon; the cache is never complete history |
+| Owner identity, contacts, dialogs, common chats | Telethon |
+| History, search, message context, including sender/date filters | Telethon; the cache is never complete history |
 | Resolve/chat metadata for negative IDs or usernames | Bot first when ready, but private results use Telethon |
 | Positive private-user metadata | Telethon |
 | Exact private message by numeric ID | Verified Business/Secretary cache, then permitted Telethon fallback |

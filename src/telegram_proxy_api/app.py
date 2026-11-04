@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from importlib.metadata import version
 from typing import Any, AsyncIterator
 from urllib.parse import quote
 
 import yaml
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from .config import Settings, get_settings
 from .dependencies import get_gateway, require_access_token
 from .errors import TelegramProxyError
-from .gateway import TelegramGateway
+from .gateway import MessageFilter, TelegramGateway
 from .models import (
     ApiResponse,
     ChatDetail,
@@ -35,6 +36,26 @@ def build_content_disposition(file_name: str) -> str:
         ascii_fallback = "download"
     encoded = quote(file_name, safe="")
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
+
+
+def message_filter(
+    from_user: str | None = Query(
+        default=None,
+        description="Only messages sent by this user (numeric ID or @username). Search requires chat_id with it.",
+    ),
+    since: datetime | None = Query(
+        default=None, description="Only messages sent at or after this ISO 8601 time; naive times are UTC."
+    ),
+    until: datetime | None = Query(
+        default=None, description="Only messages sent before this ISO 8601 time; naive times are UTC."
+    ),
+    before_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Cursor: only messages older than this message ID. Pass meta.next_before_id for the next page.",
+    ),
+) -> MessageFilter:
+    return MessageFilter(from_user=from_user, since=since, until=until, before_id=before_id)
 
 
 def create_app(
@@ -118,15 +139,34 @@ def create_app(
         return api_response(await gateway.get_chat(chat_id))
 
     @app.get(
+        "/users/{user_id}/common-chats",
+        operation_id="users_common_chats",
+        response_model=ApiResponse[list[ChatSummary]],
+    )
+    async def get_common_chats(
+        user_id: str,
+        page: int = 1,
+        page_size: int = 25,
+        gateway: TelegramGateway = Depends(get_gateway),
+    ) -> ApiResponse[list[ChatSummary]]:
+        return api_response(await gateway.list_common_chats(user_ref=user_id, page=page, page_size=page_size))
+
+    @app.get(
         "/chats/{chat_id}/messages", operation_id="messages_list", response_model=ApiResponse[list[MessageSummary]]
     )
     async def get_messages(
         chat_id: str,
         page: int = 1,
         page_size: int = 25,
+        filters: MessageFilter = Depends(message_filter),
+        include_raw: bool = Query(default=True, description="Include telegram_raw payloads."),
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[MessageSummary]]:
-        return api_response(await gateway.list_messages(chat_ref=chat_id, page=page, page_size=page_size))
+        return api_response(
+            await gateway.list_messages(
+                chat_ref=chat_id, page=page, page_size=page_size, filters=filters, include_raw=include_raw
+            )
+        )
 
     @app.get(
         "/chats/{chat_id}/messages/{message_id}", operation_id="messages_get", response_model=ApiResponse[MessageDetail]
@@ -158,10 +198,12 @@ def create_app(
 
     @app.get("/messages/search", operation_id="messages_search", response_model=ApiResponse[list[MessageSummary]])
     async def search_messages(
-        query: str,
+        query: str | None = Query(default=None, description="Text to search for; optional when from_user is set."),
         chat_id: str | None = None,
         page: int = 1,
         page_size: int = 25,
+        filters: MessageFilter = Depends(message_filter),
+        include_raw: bool = Query(default=True, description="Include telegram_raw payloads."),
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[MessageSummary]]:
         data = await gateway.search_messages(
@@ -169,6 +211,8 @@ def create_app(
             chat_ref=chat_id,
             page=page,
             page_size=page_size,
+            filters=filters,
+            include_raw=include_raw,
         )
         return api_response(data)
 

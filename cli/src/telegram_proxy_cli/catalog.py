@@ -17,6 +17,7 @@ COMMANDS: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/resolve"): ("resolve",),
     ("GET", "/chats"): ("chats", "list"),
     ("GET", "/chats/{chat_id}"): ("chats", "get"),
+    ("GET", "/users/{user_id}/common-chats"): ("users", "common-chats"),
     ("GET", "/chats/{chat_id}/messages"): ("messages", "list"),
     ("GET", "/chats/{chat_id}/messages/{message_id}"): ("messages", "get"),
     ("GET", "/chats/{chat_id}/messages/{message_id}/context"): ("messages", "context"),

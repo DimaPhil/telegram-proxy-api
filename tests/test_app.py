@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
 from telegram_proxy_api.app import build_content_disposition, create_app
 from telegram_proxy_api.config import Settings
-from telegram_proxy_api.gateway import GatewayResult, MediaBundle, MediaStream
+from telegram_proxy_api.gateway import GatewayResult, MediaBundle, MediaStream, MessageFilter
 from telegram_proxy_api.models import (
     ChatDetail,
     ChatSummary,
@@ -27,6 +29,9 @@ async def _stream_bytes(payload: bytes):
 
 
 class FakeTelethon:
+    def __init__(self):
+        self.calls: dict[str, dict[str, object]] = {}
+
     def health_status(self):
         return HealthStatus(status="ok", telegram_connected=True, session_file="/tmp/test.session")
 
@@ -82,7 +87,21 @@ class FakeTelethon:
             telegram_raw={},
         )
 
-    async def list_messages(self, *, chat_ref: str, page: int, page_size: int):
+    async def list_common_chats(self, *, user_ref: str, page: int, page_size: int):
+        self.calls["list_common_chats"] = {"user_ref": user_ref}
+        chats, _ = await self.list_chats(page=page, page_size=page_size)
+        return chats, ResponseMeta(page=page, page_size=page_size, total=len(chats))
+
+    async def list_messages(
+        self,
+        *,
+        chat_ref: str,
+        page: int,
+        page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
+    ):
+        self.calls["list_messages"] = {"filters": filters, "include_raw": include_raw}
         message = await self.get_message(chat_ref=chat_ref, message_id=10)
         return [MessageSummary(**message.model_dump(exclude={"media"}))], ResponseMeta(page=page, page_size=page_size)
 
@@ -145,7 +164,17 @@ class FakeTelethon:
         summary = MessageSummary(**message.model_dump(exclude={"media"}))
         return MessageContext(before=[summary], message=message, after=[summary])
 
-    async def search_messages(self, *, query: str, chat_ref: str | None, page: int, page_size: int):
+    async def search_messages(
+        self,
+        *,
+        query: str | None,
+        chat_ref: str | None,
+        page: int,
+        page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
+    ):
+        self.calls["search_messages"] = {"query": query, "filters": filters, "include_raw": include_raw}
         message = await self.get_message(chat_ref=chat_ref or "global", message_id=10)
         return [MessageSummary(**message.model_dump(exclude={"media"}))], ResponseMeta(page=page, page_size=page_size)
 
@@ -184,14 +213,16 @@ class FakeGateway:
         return call
 
 
-def create_test_client(*, auth_enabled: bool = False, bearer_token: str | None = None) -> TestClient:
+def create_test_client(
+    *, auth_enabled: bool = False, bearer_token: str | None = None, gateway: FakeGateway | None = None
+) -> TestClient:
     settings = Settings(
         TELEGRAM_API_ID=1,
         TELEGRAM_API_HASH="hash",
         API_AUTH_ENABLED=auth_enabled,
         API_BEARER_TOKEN=bearer_token,
     )
-    app = create_app(settings=settings, gateway=FakeGateway())
+    app = create_app(settings=settings, gateway=gateway or FakeGateway())
     return TestClient(app)
 
 
@@ -243,6 +274,46 @@ def test_messages_endpoint():
 
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == "10"
+
+
+def test_message_filters_reach_gateway_with_naive_times_as_utc():
+    gateway = FakeGateway()
+    with create_test_client(gateway=gateway) as client:
+        listed = client.get(
+            "/chats/100/messages",
+            params={"from_user": "@author", "since": "2026-05-04T00:00:00", "before_id": 7, "include_raw": False},
+        )
+        searched = client.get("/messages/search", params={"chat_id": "100", "from_user": "42"})
+
+    assert listed.status_code == 200
+    assert gateway.telethon.calls["list_messages"] == {
+        "filters": MessageFilter(from_user="@author", since=datetime(2026, 5, 4, tzinfo=UTC), before_id=7),
+        "include_raw": False,
+    }
+    assert searched.status_code == 200
+    assert gateway.telethon.calls["search_messages"]["query"] is None
+
+
+def test_message_filters_reject_inverted_range_and_non_positive_cursor():
+    with create_test_client() as client:
+        inverted = client.get(
+            "/chats/100/messages", params={"since": "2026-05-04T00:00:00Z", "until": "2026-05-01T00:00:00Z"}
+        )
+        cursor = client.get("/chats/100/messages", params={"before_id": 0})
+
+    assert inverted.status_code == 400
+    assert inverted.json()["detail"] == "since must be earlier than until"
+    assert cursor.status_code == 422
+
+
+def test_common_chats_endpoint():
+    gateway = FakeGateway()
+    with create_test_client(gateway=gateway) as client:
+        response = client.get("/users/@author/common-chats")
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "100"
+    assert gateway.telethon.calls["list_common_chats"] == {"user_ref": "@author"}
 
 
 def test_additional_json_endpoints():
