@@ -24,6 +24,7 @@ from telegram_proxy_cli.skill import install_skill
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.delenv("TG_API_TOKEN", raising=False)
     monkeypatch.delenv("TG_API_URL", raising=False)
@@ -155,6 +156,7 @@ def test_unsafe_urls_rejected(url: str) -> None:
 
 
 def test_saved_credentials_are_private_and_origin_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert config_path() == Path.home() / ".lilfeel" / "tg" / "credentials.json"
     credentials = Credentials("https://api.example", "test-secret")
     save_credentials(credentials)
     assert config_path().stat().st_mode & 0o777 == 0o600

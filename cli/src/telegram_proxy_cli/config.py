@@ -38,8 +38,7 @@ def normalize_url(value: str) -> str:
 
 
 def config_path() -> Path:
-    root = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    return root / "tg" / "credentials.json"
+    return Path.home() / ".lilfeel" / "tg" / "credentials.json"
 
 
 def load_credentials() -> Credentials | None:
