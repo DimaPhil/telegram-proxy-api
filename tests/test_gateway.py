@@ -7,6 +7,7 @@ import pytest
 from telethon import utils
 from telethon.tl import types
 from telethon.tl.functions.messages import GetCommonChatsRequest
+from telethon.tl.tlobject import TLObject
 
 from telegram_proxy_api import gateway as gateway_module
 from telegram_proxy_api.errors import (
@@ -45,6 +46,8 @@ class FakeClient:
         self.history_messages = []
         self.contacts_result = FakeContactsResult([])
         self.get_input_entity_calls = 0
+        self.full_entities: dict[int, object] = {}
+        self.full_entity_lookups: list[object] = []
         self.iter_calls: list[dict[str, object]] = []
         self.yielded = 0
         self.common_chats = []
@@ -73,6 +76,9 @@ class FakeClient:
         raise ValueError("not cached")
 
     async def get_entity(self, lookup):
+        if isinstance(lookup, TLObject):
+            self.full_entity_lookups.append(lookup)
+            return self.full_entities[utils.get_peer_id(lookup)]
         if lookup not in self.entities:
             raise ValueError("not found")
         return self.entities[lookup]
@@ -214,6 +220,45 @@ async def test_resolve_uses_cache_after_first_lookup(gateway, fake_client):
     assert first.peer.id == "200"
     assert second.peer.id == "200"
     assert fake_client.get_input_entity_calls == 1
+    assert fake_client.full_entity_lookups == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_of_session_cached_user_reports_name_username_and_user_type(gateway, fake_client):
+    cached = types.InputPeerUser(user_id=278851442, access_hash=7)
+    fake_client.input_entities.append(("@norbusha", cached))
+    fake_client.full_entities[278851442] = types.User(
+        id=278851442, access_hash=7, first_name="Norbert", last_name="Fedaka", username="Norbusha"
+    )
+
+    result = await gateway.resolve("@norbusha")
+
+    assert result.peer.model_dump() == {
+        "id": "278851442",
+        "display_name": "Norbert Fedaka",
+        "username": "Norbusha",
+        "type": "user",
+    }
+    assert fake_client.full_entity_lookups == [cached]
+
+
+@pytest.mark.asyncio
+async def test_get_chat_of_session_cached_supergroup_reports_title_and_supergroup_type(gateway, fake_client):
+    cached = types.InputPeerChannel(channel_id=1625820829, access_hash=9)
+    fake_client.input_entities.append((types.PeerChannel(1625820829), cached))
+    fake_client.full_entities[-1001625820829] = types.Channel(
+        id=1625820829,
+        title="Builders",
+        photo=types.ChatPhotoEmpty(),
+        date=datetime(2024, 1, 1, tzinfo=UTC),
+        megagroup=True,
+        access_hash=9,
+        participants_count=42,
+    )
+
+    chat = await gateway.get_chat("-1001625820829")
+
+    assert (chat.id, chat.title, chat.type, chat.participant_count) == ("-1001625820829", "Builders", "supergroup", 42)
 
 
 @pytest.mark.asyncio

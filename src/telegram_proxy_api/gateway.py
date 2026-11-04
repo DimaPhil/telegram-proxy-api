@@ -68,6 +68,7 @@ from .session import normalize_string_session
 _INTEGER_REF = re.compile(r"^-?\d+$")
 _MAX_SIGNED_CHAT_ID = 2_147_483_647
 _COMMON_CHATS_BATCH = 100
+_INPUT_PEER_TYPES = (types.InputPeerUser, types.InputPeerSelf, types.InputPeerChat, types.InputPeerChannel)
 
 
 @dataclass(slots=True)
@@ -246,7 +247,7 @@ class TelethonGateway:
         )
 
     async def get_chat(self, chat_ref: str) -> ChatDetail:
-        entity = await self._resolve_entity(chat_ref)
+        entity = await self._full_entity(await self._resolve_entity(chat_ref))
         about = getattr(entity, "about", None)
         return serialize_chat_detail(entity, about=about)
 
@@ -451,7 +452,14 @@ class TelethonGateway:
 
     async def resolve(self, peer_ref: str) -> ResolveResult:
         entity = await self._resolve_entity(peer_ref, allow_remote_lookup=True)
-        return serialize_resolve_result(peer_ref, entity)
+        return serialize_resolve_result(peer_ref, await self._full_entity(entity))
+
+    async def _full_entity(self, entity: Any) -> Any:
+        # Session-cache hits are InputPeer* objects carrying only id and access hash, so metadata
+        # reads fetch the full entity by id (users.getUsers / channels.getChannels, not username lookup).
+        if isinstance(entity, _INPUT_PEER_TYPES):
+            return await self._call(self.client.get_entity(entity))
+        return entity
 
     async def get_message_media(
         self,
