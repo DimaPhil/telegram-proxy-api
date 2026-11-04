@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from telethon.tl import types
 
 from telegram_proxy_api.serializers import (
@@ -9,6 +10,7 @@ from telegram_proxy_api.serializers import (
     serialize_contact,
     serialize_message_detail,
     serialize_message_summary,
+    serialize_peer_ref,
     unique_archive_name,
 )
 from tests.conftest import (
@@ -109,3 +111,23 @@ def test_serialize_forwarded_message_summary_exposes_forward_origin():
     assert result.forward_info.from_peer.type == "channel"
     assert result.forward_info.channel_post == "55"
     assert result.forward_info.post_author == "Channel Admin"
+
+
+@pytest.mark.parametrize(
+    ("peer", "expected_type"),
+    [
+        (types.InputPeerUser(user_id=5, access_hash=1), "user"),
+        (types.InputPeerSelf(), "user"),
+        (types.InputPeerChat(chat_id=6), "chat"),
+        (types.InputPeerChannel(channel_id=7, access_hash=1), "channel"),
+    ],
+)
+def test_id_only_input_peer_keeps_its_kind_and_reports_no_name(peer, expected_type):
+    result = serialize_peer_ref(peer)
+
+    assert result is not None
+    assert (result.type, result.display_name, result.username) == (expected_type, None, None)
+
+
+def test_user_without_names_is_still_a_user():
+    assert serialize_peer_ref(types.User(id=5, deleted=True)).type == "user"

@@ -80,12 +80,23 @@ def peer_id_as_str(peer: Any) -> str:
     return str(peer)
 
 
+_ID_ONLY_PEERS = (
+    types.PeerUser,
+    types.PeerChat,
+    types.PeerChannel,
+    types.InputPeerUser,
+    types.InputPeerSelf,
+    types.InputPeerChat,
+    types.InputPeerChannel,
+)
+
+
 def infer_peer_type(entity: Any) -> str:
-    if isinstance(entity, types.PeerChannel):
+    if isinstance(entity, (types.PeerChannel, types.InputPeerChannel)):
         return "channel"
-    if isinstance(entity, types.PeerChat):
+    if isinstance(entity, (types.PeerChat, types.InputPeerChat)):
         return "chat"
-    if isinstance(entity, types.PeerUser):
+    if isinstance(entity, (types.PeerUser, types.InputPeerUser, types.InputPeerSelf)):
         return "user"
     if getattr(entity, "broadcast", False):
         return "channel"
@@ -93,7 +104,7 @@ def infer_peer_type(entity: Any) -> str:
         return "supergroup"
     if getattr(entity, "bot", False):
         return "bot"
-    if getattr(entity, "first_name", None) or getattr(entity, "last_name", None):
+    if isinstance(entity, types.User) or getattr(entity, "first_name", None) or getattr(entity, "last_name", None):
         return "user"
     return "chat"
 
@@ -101,7 +112,7 @@ def infer_peer_type(entity: Any) -> str:
 def display_name(entity: Any) -> str | None:
     if entity is None:
         return "Unknown"
-    if isinstance(entity, (types.PeerUser, types.PeerChat, types.PeerChannel)):
+    if isinstance(entity, _ID_ONLY_PEERS):
         return None
     full_name = " ".join(
         part for part in [getattr(entity, "first_name", None), getattr(entity, "last_name", None)] if part
