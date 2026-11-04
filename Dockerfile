@@ -20,4 +20,7 @@ USER appuser
 
 EXPOSE 4040
 
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GIT_REVISION
+
 CMD ["telegram-proxy-api"]

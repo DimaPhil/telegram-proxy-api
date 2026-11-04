@@ -35,4 +35,7 @@ jobs:
         if: matrix.python == '3.12'
         run: |
           docker compose config --quiet
-          docker build --tag telegram-proxy-api:ci .
+          GIT_REVISION="$GITHUB_SHA" docker compose build telegram-proxy
+          image="$(docker compose config --images)"
+          revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+          test "$revision" = "$GITHUB_SHA" || { echo "image revision '$revision' != $GITHUB_SHA" >&2; exit 1; }
