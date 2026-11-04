@@ -71,7 +71,7 @@ docker compose --profile auth run --rm telegram-auth
 docker compose up -d telegram-proxy
 ```
 
-The API will be available at [http://localhost:4040](http://localhost:4040) by default. Set `PORT` to change it; the app also still accepts `APP_PORT` for compatibility.
+The API will be available at [http://localhost:4040](http://localhost:4040) by default. Set `PORT` to change it; the app also still accepts `APP_PORT` for compatibility. Compose publishes the port on `127.0.0.1` only, because Docker's port rules bypass host firewalls such as ufw; expose it to other machines through a reverse proxy or `tailscale serve`.
 
 ## Manual Authentication Without Docker
 
@@ -175,4 +175,5 @@ A successful CI run for a push to `main` triggers the Release workflow. It selec
 - Copy `.env` to the server and keep it out of version control.
 - Run the auth profile once to create the persisted session volume.
 - Keep the named Docker volume or bind-mount `/data/telegram` so restarts do not require re-authentication.
-- Use `docker compose pull && docker compose up -d --build` for upgrades.
+- Upgrade with `git pull --ff-only && GIT_REVISION=$(git rev-parse HEAD) docker compose up -d --build`, then confirm the running container's `org.opencontainers.image.revision` label matches that commit: `docker compose up` keeps an existing container when no image change reaches it.
+- Builds use the default bridge network and need working DNS there. If `pip install` fails with `Temporary failure in name resolution` while running containers resolve fine, the host's resolver probably lists IPv6 servers first: glibc uses only three nameservers and build containers have no IPv6. Set IPv4 servers in `"dns"` in `/etc/docker/daemon.json` and restart Docker.

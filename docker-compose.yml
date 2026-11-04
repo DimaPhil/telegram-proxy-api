@@ -3,7 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
+      args:
+        GIT_REVISION: ${GIT_REVISION:-unknown}
     env_file:
       - .env
     environment:
@@ -11,7 +12,7 @@ services:
       TELEGRAM_SESSION_DIR: /data/telegram
       TELEGRAM_BOT_STORE_PATH: /data/telegram/bot-cache.sqlite3
     ports:
-      - "${PORT:-4040}:${PORT:-4040}"
+      - "127.0.0.1:${PORT:-4040}:${PORT:-4040}"
     volumes:
       - telegram-session-data:/data/telegram
     restart: unless-stopped
@@ -32,7 +33,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
+      args:
+        GIT_REVISION: ${GIT_REVISION:-unknown}
     env_file:
       - .env
     environment:
