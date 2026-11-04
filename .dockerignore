@@ -7,3 +7,9 @@ htmlcov
 .coverage
 tests
 data
+.env
+.env.*
+.artifact-review
+cli
+dist
+dist-release

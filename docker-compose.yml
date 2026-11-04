@@ -9,6 +9,7 @@ services:
     environment:
       PORT: ${PORT:-4040}
       TELEGRAM_SESSION_DIR: /data/telegram
+      TELEGRAM_BOT_STORE_PATH: /data/telegram/bot-cache.sqlite3
     ports:
       - "${PORT:-4040}:${PORT:-4040}"
     volumes:
@@ -20,7 +21,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import os, sys, urllib.request; port = os.getenv('PORT', '4040'); sys.exit(0 if urllib.request.urlopen(f'http://localhost:{port}/healthz').status == 200 else 1)",
+          "import os, sys, urllib.request; port = os.getenv('PORT', '4040'); token = os.getenv('API_BEARER_TOKEN', ''); request = urllib.request.Request(f'http://localhost:{port}/healthz', headers={'Authorization': f'Bearer {token}'} if token else {}); sys.exit(0 if urllib.request.urlopen(request).status == 200 else 1)",
         ]
       interval: 30s
       timeout: 10s

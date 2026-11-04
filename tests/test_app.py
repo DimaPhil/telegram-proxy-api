@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
+import pytest
 from fastapi.testclient import TestClient
 
 from telegram_proxy_api.app import build_content_disposition, create_app
 from telegram_proxy_api.config import Settings
-from telegram_proxy_api.gateway import MediaBundle, MediaStream
+from telegram_proxy_api.gateway import GatewayResult, MediaBundle, MediaStream
 from telegram_proxy_api.models import (
     ChatDetail,
     ChatSummary,
@@ -20,13 +19,14 @@ from telegram_proxy_api.models import (
     ResolveResult,
     ResponseMeta,
 )
+from telegram_proxy_api.responses import ClosingStreamingResponse
 
 
 async def _stream_bytes(payload: bytes):
     yield payload
 
 
-class FakeGateway:
+class FakeTelethon:
     def health_status(self):
         return HealthStatus(status="ok", telegram_connected=True, session_file="/tmp/test.session")
 
@@ -50,7 +50,9 @@ class FakeGateway:
         return [await self.get_me()], ResponseMeta(page=page, page_size=page_size, total=1)
 
     async def resolve(self, value: str):
-        return ResolveResult(input=value, peer=PeerRef(id="42", display_name="Resolved", username="resolved", type="user"))
+        return ResolveResult(
+            input=value, peer=PeerRef(id="42", display_name="Resolved", username="resolved", type="user")
+        )
 
     async def list_chats(self, *, page: int, page_size: int):
         return [
@@ -158,6 +160,30 @@ class FakeGateway:
         return MediaBundle(file_name="архив.zip", content=b"zip")
 
 
+class FakeGateway:
+    """Adapt the fixture's raw Telethon values to the facade contract."""
+
+    def __init__(self):
+        self.telethon = FakeTelethon()
+
+    def health_status(self):
+        return self.telethon.health_status()
+
+    def __getattr__(self, name):
+        async def call(*args, **kwargs):
+            result = await getattr(self.telethon, name)(*args, **kwargs)
+            if isinstance(result, (MediaStream, MediaBundle)):
+                return result
+            data, meta = result if isinstance(result, tuple) else (result, ResponseMeta())
+            if name == "get_message_context":
+                meta.context_size = kwargs["context_size"]
+            meta.provider = "telethon"
+            meta.fallback_used = False
+            return GatewayResult(data=data, meta=meta)
+
+        return call
+
+
 def create_test_client(*, auth_enabled: bool = False, bearer_token: str | None = None) -> TestClient:
     settings = Settings(
         TELEGRAM_API_ID=1,
@@ -199,6 +225,8 @@ def test_message_media_stream_response():
     assert response.status_code == 200
     assert "filename*=UTF-8''%D1%84%D0%BE%D1%82%D0%BE.jpg" in response.headers["content-disposition"]
     assert response.content == b"abc"
+    assert response.headers["x-telegram-provider"] == "telethon"
+    assert response.headers["x-telegram-fallback"] == "false"
 
 
 def test_openapi_yaml_endpoint():
@@ -232,6 +260,8 @@ def test_additional_json_endpoints():
         openapi_json = client.get("/schema/openapi.json")
 
     assert me.status_code == 200
+    assert me.json()["meta"]["provider"] == "telethon"
+    assert me.json()["meta"]["fallback_used"] is False
     assert contacts.json()["meta"]["total"] == 1
     assert resolve.json()["data"]["peer"]["id"] == "42"
     assert chats.json()["data"][0]["id"] == "100"
@@ -260,3 +290,31 @@ def test_content_disposition_builds_ascii_fallback_and_utf8_filename():
 
     assert 'attachment; filename="' in header
     assert "filename*=UTF-8''%D1%84%D0%B0%D0%B9%D0%BB%20%221%22.jpg" in header
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_upstream_when_response_start_fails():
+    class Stream:
+        closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise AssertionError("No body should be requested")
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+
+    async def send(_):
+        raise OSError("client disconnected before headers")
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    response = ClosingStreamingResponse(stream)
+    with pytest.raises(Exception):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    assert stream.closed

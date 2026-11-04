@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +25,8 @@ class ResponseMeta(BaseModel):
     total: int | None = None
     context_size: int | None = None
     include_album: bool | None = None
+    provider: Literal["bot_api", "telethon"] | None = None
+    fallback_used: bool | None = None
 
 
 class ApiResponse(BaseModel, Generic[T]):
@@ -130,7 +132,23 @@ class ResolveResult(BaseModel):
     peer: PeerRef
 
 
+class BotHealth(BaseModel):
+    mode: Literal["off", "shadow", "primary"] = "off"
+    healthy: bool = False
+    poller_running: bool = False
+    secretary_connection_verified: bool = False
+    last_update_at: datetime | None = None
+    last_error: str | None = None
+
+
+class TelethonHealth(BaseModel):
+    healthy: bool = False
+
+
 class HealthStatus(BaseModel):
     status: str
     telegram_connected: bool
     session_file: str
+    primary_provider: Literal["bot_api", "telethon"] = "telethon"
+    bot_api: BotHealth = Field(default_factory=BotHealth)
+    telethon: TelethonHealth = Field(default_factory=TelethonHealth)

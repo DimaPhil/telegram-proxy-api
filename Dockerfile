@@ -6,11 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
 COPY src ./src
 
 RUN pip install --upgrade pip \
-    && pip install .
+    && pip install -c requirements.lock .
 
 RUN useradd --create-home --shell /bin/bash appuser \
     && mkdir -p /data/telegram \
