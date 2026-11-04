@@ -1,6 +1,6 @@
 # Maintainer context
 
-This is the durable entry point for future repository sessions. Read root `AGENTS.md` first. This guide describes the implementation introduced in PR #1, not a running deployment. Check current source, Git history and GitHub before relying on historical delivery status. The original technical specification records the design and its earlier research; current code and tests win when details differ.
+Read root `AGENTS.md` first. This guide describes the implementation introduced in PR #1. Check current source, tests and GitHub for delivery status, and inspect the running service for deployment status.
 
 ## Product and boundaries
 

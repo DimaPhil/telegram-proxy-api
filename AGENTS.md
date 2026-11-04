@@ -2,10 +2,9 @@
 
 ## Start here
 
-- Read [the maintainer guide](docs/AGENT_CONTEXT.md) for the source map, routing rules, failure cases, validation and release/install procedure. Use [the HTML walkthrough](.artifact-review/how-it-works.html) for the visual overview and [README.md](README.md) for operator setup.
-- Treat source and tests as authoritative. `TELEGRAM_BOT_API_INTEGRATION_TECH_SPEC.md` is the original design snapshot; it is not proof of current Telegram capabilities, deployed configuration or release status.
+- Read [the maintainer guide](docs/AGENT_CONTEXT.md) for the source map, routing rules, failure cases, validation and release/install procedure. Use [README.md](README.md) for operator setup.
 - Before resuming delivery, inspect `git status`, the current branch and current PR/check state. Do not infer merge, release, deployment, live authorization or active Bot mode from earlier test results.
-- Keep the maintainer guide and HTML walkthrough consistent when changing architecture, routing, installation or release behavior. CLI-specific contributor instructions live in [cli/AGENTS.md](cli/AGENTS.md); the installed consumer skill is a separate artifact.
+- Update the maintainer guide when changing architecture, routing, installation or release behavior. CLI-specific contributor instructions live in [cli/AGENTS.md](cli/AGENTS.md).
 
 ## Architecture
 
