@@ -24,6 +24,7 @@ from telethon.errors import (
 from telethon.sessions import SQLiteSession
 from telethon.tl import types
 from telethon.tl.functions.contacts import GetContactsRequest
+from telethon.tl.functions.messages import GetCommonChatsRequest
 
 from .bot_client import BotApiClient, BotApiError, BotFileStream
 from .bot_serializers import bot_media_object, serialize_bot_chat, serialize_bot_message
@@ -66,6 +67,7 @@ from .session import normalize_string_session
 
 _INTEGER_REF = re.compile(r"^-?\d+$")
 _MAX_SIGNED_CHAT_ID = 2_147_483_647
+_COMMON_CHATS_BATCH = 100
 
 
 @dataclass(slots=True)
@@ -84,6 +86,34 @@ class MediaBundle:
     content: bytes
     provider: Literal["bot_api", "telethon"] = "telethon"
     fallback_used: bool = False
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class MessageFilter:
+    """History filters. `since` is inclusive, `until` and `before_id` are exclusive; naive times are UTC."""
+
+    from_user: str | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+    before_id: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "since", _as_utc(self.since))
+        object.__setattr__(self, "until", _as_utc(self.until))
+        if self.since is not None and self.until is not None and self.since >= self.until:
+            raise BadRequestError("since must be earlier than until")
+        if self.before_id is not None and self.before_id < 1:
+            raise BadRequestError("before_id must be positive")
+
+    @property
+    def active(self) -> bool:
+        return any(value is not None for value in (self.from_user, self.since, self.until, self.before_id))
 
 
 class TelethonGateway:
@@ -220,31 +250,120 @@ class TelethonGateway:
         about = getattr(entity, "about", None)
         return serialize_chat_detail(entity, about=about)
 
+    async def list_common_chats(
+        self,
+        *,
+        user_ref: str,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[ChatSummary], ResponseMeta]:
+        self._validate_page_size(page_size)
+        self._validate_page(page)
+        user = await self._resolve_entity(user_ref, allow_remote_lookup=True)
+        try:
+            input_user = utils.get_input_user(user)
+        except TypeError:
+            raise BadRequestError("user_id must reference a user") from None
+        chats: list[Any] = []
+        max_id = 0
+        while True:
+            result = await self._call(
+                self.client(GetCommonChatsRequest(user_id=input_user, max_id=max_id, limit=_COMMON_CHATS_BATCH))
+            )
+            batch = list(getattr(result, "chats", []))
+            chats.extend(batch)
+            next_max_id = min((chat.id for chat in batch), default=0)
+            if len(batch) < _COMMON_CHATS_BATCH or (max_id and next_max_id >= max_id):
+                break
+            max_id = next_max_id
+        start = (page - 1) * page_size
+        items = [serialize_chat_summary(chat) for chat in chats[start : start + page_size]]
+        return items, ResponseMeta(page=page, page_size=page_size, total=len(chats))
+
     async def list_messages(
         self,
         *,
         chat_ref: str,
         page: int,
         page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
     ) -> tuple[list[MessageSummary], ResponseMeta]:
         self._validate_page_size(page_size)
         self._validate_page(page)
         entity = await self._resolve_entity(chat_ref)
         chat_id = self._entity_key(chat_ref, entity)
-        offset = (page - 1) * page_size
-        messages = await self._history_call(
-            self.client.get_messages(
-                entity,
-                limit=page_size + 1,
-                add_offset=offset,
-                wait_time=self.settings.telegram_history_wait_time,
-            )
+        items, next_before_id = await self._query_messages(
+            entity,
+            chat_id=chat_id,
+            search=None,
+            page=page,
+            page_size=page_size,
+            filters=filters,
+            include_raw=include_raw,
         )
-        items = [serialize_message_summary(message, chat_id=chat_id) for message in messages[:page_size]]
-        total = None
-        if len(messages) <= page_size and page == 1:
-            total = len(messages)
-        return items, ResponseMeta(page=page, page_size=page_size, total=total)
+        total = len(items) if page == 1 and next_before_id is None else None
+        return items, ResponseMeta(page=page, page_size=page_size, total=total, next_before_id=next_before_id)
+
+    async def _query_messages(
+        self,
+        entity: Any,
+        *,
+        chat_id: str,
+        search: str | None,
+        page: int,
+        page_size: int,
+        filters: MessageFilter,
+        include_raw: bool,
+    ) -> tuple[list[MessageSummary], int | None]:
+        if filters.active and page != 1:
+            raise BadRequestError("Filtered queries paginate with before_id; page must be 1")
+        if entity is None and (filters.from_user is not None or filters.before_id is not None):
+            raise BadRequestError("from_user and before_id require chat_id")
+        sender = (
+            await self._resolve_entity(filters.from_user, allow_remote_lookup=True)
+            if filters.from_user is not None
+            else None
+        )
+        # Telegram ignores from_id in private chats and Telethon then drops other senders before its
+        # range checks, so a sender-filtered private chat could scan its whole history past `since`.
+        local_sender_id = utils.get_peer_id(sender) if sender is not None and self._is_private(entity) else None
+        server_sender = sender if local_sender_id is None else None
+        since = filters.since
+
+        async def collect() -> list[Any]:
+            found: list[Any] = []
+            async for message in self.client.iter_messages(
+                entity,
+                limit=None if local_sender_id is not None else page_size + 1,
+                offset_date=filters.until,
+                offset_id=filters.before_id or 0,
+                add_offset=(page - 1) * page_size,
+                search=search,
+                from_user=server_sender,
+                wait_time=self.settings.telegram_history_wait_time,
+            ):
+                date = getattr(message, "date", None)
+                if since is not None and date is not None and date < since:
+                    break
+                if local_sender_id is not None and getattr(message, "sender_id", None) != local_sender_id:
+                    continue
+                found.append(message)
+                if len(found) > page_size:
+                    break
+            return found
+
+        messages = await self._history_call(collect())
+        items = [
+            serialize_message_summary(message, chat_id=chat_id, include_raw=include_raw)
+            for message in messages[:page_size]
+        ]
+        has_more = len(messages) > page_size and entity is not None
+        return items, int(messages[page_size - 1].id) if has_more else None
+
+    @staticmethod
+    def _is_private(entity: Any) -> bool:
+        return isinstance(entity, (types.InputPeerUser, types.InputPeerSelf, types.User))
 
     async def get_message(self, *, chat_ref: str, message_id: int) -> MessageDetail:
         entity = await self._resolve_entity(chat_ref)
@@ -305,29 +424,30 @@ class TelethonGateway:
     async def search_messages(
         self,
         *,
-        query: str,
+        query: str | None,
         chat_ref: str | None,
         page: int,
         page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
     ) -> tuple[list[MessageSummary], ResponseMeta]:
-        if not query.strip():
-            raise BadRequestError("query is required")
+        search = query.strip() if query else ""
+        if not search and filters.from_user is None:
+            raise BadRequestError("query or from_user is required")
         self._validate_page_size(page_size)
         self._validate_page(page)
-        offset = (page - 1) * page_size
         entity = await self._resolve_entity(chat_ref) if chat_ref else None
         chat_id = self._entity_key(chat_ref, entity) if chat_ref else "global"
-        messages = await self._history_call(
-            self.client.get_messages(
-                entity,
-                limit=page_size + 1,
-                add_offset=offset,
-                search=query,
-                wait_time=self.settings.telegram_history_wait_time,
-            )
+        items, next_before_id = await self._query_messages(
+            entity,
+            chat_id=chat_id,
+            search=query if search else None,
+            page=page,
+            page_size=page_size,
+            filters=filters,
+            include_raw=include_raw,
         )
-        items = [serialize_message_summary(message, chat_id=chat_id) for message in messages[:page_size]]
-        return items, ResponseMeta(page=page, page_size=page_size, total=None)
+        return items, ResponseMeta(page=page, page_size=page_size, total=None, next_before_id=next_before_id)
 
     async def resolve(self, peer_ref: str) -> ResolveResult:
         entity = await self._resolve_entity(peer_ref, allow_remote_lookup=True)
@@ -945,6 +1065,10 @@ class TelegramGateway:
         data, meta = await self._telethon().list_chats(page=page, page_size=page_size)
         return self._result(data, meta=meta)
 
+    async def list_common_chats(self, *, user_ref: str, page: int, page_size: int) -> GatewayResult[list[ChatSummary]]:
+        data, meta = await self._telethon().list_common_chats(user_ref=user_ref, page=page, page_size=page_size)
+        return self._result(data, meta=meta)
+
     async def get_chat(self, chat_ref: str) -> GatewayResult[ChatDetail]:
         eligible = self.settings.telegram_bot_mode == "primary" and self._bot_chat_ref(chat_ref)
         if eligible and self._bot_available():
@@ -987,8 +1111,18 @@ class TelegramGateway:
             self._fallback("resolve", self._last_error or "not-ready")
         return self._result(await self._telethon().resolve(peer_ref), fallback=eligible)
 
-    async def list_messages(self, *, chat_ref: str, page: int, page_size: int) -> GatewayResult[list[MessageSummary]]:
-        data, meta = await self._telethon().list_messages(chat_ref=chat_ref, page=page, page_size=page_size)
+    async def list_messages(
+        self,
+        *,
+        chat_ref: str,
+        page: int,
+        page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
+    ) -> GatewayResult[list[MessageSummary]]:
+        data, meta = await self._telethon().list_messages(
+            chat_ref=chat_ref, page=page, page_size=page_size, filters=filters, include_raw=include_raw
+        )
         return self._result(data, meta=meta)
 
     def _cached_message(self, chat_ref: str, message_id: int) -> dict[str, Any] | None:
@@ -1028,10 +1162,22 @@ class TelegramGateway:
         return self._result(data, meta=ResponseMeta(context_size=context_size))
 
     async def search_messages(
-        self, *, query: str, chat_ref: str | None, page: int, page_size: int
+        self,
+        *,
+        query: str | None,
+        chat_ref: str | None,
+        page: int,
+        page_size: int,
+        filters: MessageFilter = MessageFilter(),
+        include_raw: bool = True,
     ) -> GatewayResult[list[MessageSummary]]:
         data, meta = await self._telethon().search_messages(
-            query=query, chat_ref=chat_ref, page=page, page_size=page_size
+            query=query,
+            chat_ref=chat_ref,
+            page=page,
+            page_size=page_size,
+            filters=filters,
+            include_raw=include_raw,
         )
         return self._result(data, meta=meta)
 

@@ -134,7 +134,7 @@ def serialize_peer_ref(entity: Any) -> PeerRef | None:
     )
 
 
-def serialize_forward_info(forward_header: Any) -> ForwardInfo | None:
+def serialize_forward_info(forward_header: Any, *, include_raw: bool = True) -> ForwardInfo | None:
     if forward_header is None:
         return None
     return ForwardInfo(
@@ -155,7 +155,7 @@ def serialize_forward_info(forward_header: Any) -> ForwardInfo | None:
         saved_from_name=getattr(forward_header, "saved_from_name", None),
         saved_date=getattr(forward_header, "saved_date", None),
         psa_type=getattr(forward_header, "psa_type", None),
-        telegram_raw=safe_telegram_dict(forward_header),
+        telegram_raw=safe_telegram_dict(forward_header) if include_raw else {},
     )
 
 
@@ -264,9 +264,9 @@ def serialize_media_descriptor(
     )
 
 
-def serialize_message_summary(message: Any, *, chat_id: str) -> MessageSummary:
+def serialize_message_summary(message: Any, *, chat_id: str, include_raw: bool = True) -> MessageSummary:
     media_count = 1 if getattr(message, "media", None) else 0
-    forward_info = serialize_forward_info(getattr(message, "fwd_from", None))
+    forward_info = serialize_forward_info(getattr(message, "fwd_from", None), include_raw=include_raw)
     return MessageSummary(
         id=str(message.id),
         chat_id=chat_id,
@@ -289,7 +289,7 @@ def serialize_message_summary(message: Any, *, chat_id: str) -> MessageSummary:
         forwards=getattr(message, "forwards", None),
         has_media=bool(getattr(message, "media", None)),
         media_count=media_count,
-        telegram_raw=safe_telegram_dict(message),
+        telegram_raw=safe_telegram_dict(message) if include_raw else {},
     )
 
 

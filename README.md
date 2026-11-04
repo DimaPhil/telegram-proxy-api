@@ -96,6 +96,7 @@ Only one long-lived service instance should own a Telegram session for a given a
 - `GET /resolve?value=@username`
 - `GET /chats`
 - `GET /chats/{chat_id}`
+- `GET /users/{user_id}/common-chats`
 - `GET /chats/{chat_id}/messages`
 - `GET /chats/{chat_id}/messages/{message_id}`
 - `GET /chats/{chat_id}/messages/{message_id}/context`
@@ -103,6 +104,14 @@ Only one long-lived service instance should own a Telegram session for a given a
 - `GET /chats/{chat_id}/messages/{message_id}/media`
 - `GET /chats/{chat_id}/messages/{message_id}/media/{media_id}`
 - `GET /chats/{chat_id}/messages/{message_id}/media/bundle`
+
+## History Filters
+
+- `messages` and `messages/search` accept `from_user`, `since` (inclusive), `until` (exclusive) and `before_id`; naive times are UTC. `query` is optional on search when `from_user` is set, and `from_user` on search requires `chat_id`.
+- Filtered queries use cursor pagination: pass `meta.next_before_id` as `before_id` until it is null; `page` must stay 1. Unfiltered queries keep page pagination and also return the cursor.
+- Groups filter senders on Telegram's side. Telegram ignores sender filters in private chats, so those are read newest-first and filtered locally, stopping at `since`.
+- `include_raw=false` omits `telegram_raw` from message summaries and their forward headers.
+- `users/{user_id}/common-chats` lists groups and channels both accounts belong to; it excludes the private chat and chats either side has left.
 
 ## Media Download Semantics
 

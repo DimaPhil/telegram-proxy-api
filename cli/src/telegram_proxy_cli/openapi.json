@@ -1136,6 +1136,17 @@
             ],
             "title": "Include Album"
           },
+          "next_before_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Id"
+          },
           "page": {
             "anyOf": [
               {
@@ -1383,6 +1394,93 @@
               "default": 25,
               "title": "Page Size",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Include telegram_raw payloads.",
+            "in": "query",
+            "name": "include_raw",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Include telegram_raw payloads.",
+              "title": "Include Raw",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Only messages sent by this user (numeric ID or @username). Search requires chat_id with it.",
+            "in": "query",
+            "name": "from_user",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent by this user (numeric ID or @username). Search requires chat_id with it.",
+              "title": "From User"
+            }
+          },
+          {
+            "description": "Only messages sent at or after this ISO 8601 time; naive times are UTC.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent at or after this ISO 8601 time; naive times are UTC.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Only messages sent before this ISO 8601 time; naive times are UTC.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent before this ISO 8601 time; naive times are UTC.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Cursor: only messages older than this message ID. Pass meta.next_before_id for the next page.",
+            "in": "query",
+            "name": "before_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cursor: only messages older than this message ID. Pass meta.next_before_id for the next page.",
+              "title": "Before Id"
             }
           }
         ],
@@ -1828,12 +1926,21 @@
         "operationId": "messages_search",
         "parameters": [
           {
+            "description": "Text to search for; optional when from_user is set.",
             "in": "query",
             "name": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Query",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Text to search for; optional when from_user is set.",
+              "title": "Query"
             }
           },
           {
@@ -1870,6 +1977,93 @@
               "default": 25,
               "title": "Page Size",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Include telegram_raw payloads.",
+            "in": "query",
+            "name": "include_raw",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Include telegram_raw payloads.",
+              "title": "Include Raw",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Only messages sent by this user (numeric ID or @username). Search requires chat_id with it.",
+            "in": "query",
+            "name": "from_user",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent by this user (numeric ID or @username). Search requires chat_id with it.",
+              "title": "From User"
+            }
+          },
+          {
+            "description": "Only messages sent at or after this ISO 8601 time; naive times are UTC.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent at or after this ISO 8601 time; naive times are UTC.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Only messages sent before this ISO 8601 time; naive times are UTC.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only messages sent before this ISO 8601 time; naive times are UTC.",
+              "title": "Until"
+            }
+          },
+          {
+            "description": "Cursor: only messages older than this message ID. Pass meta.next_before_id for the next page.",
+            "in": "query",
+            "name": "before_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cursor: only messages older than this message ID. Pass meta.next_before_id for the next page.",
+              "title": "Before Id"
             }
           }
         ],
@@ -1945,6 +2139,70 @@
           }
         ],
         "summary": "Resolve Peer"
+      }
+    },
+    "/users/{user_id}/common-chats": {
+      "get": {
+        "operationId": "users_common_chats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_list_ChatSummary__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Common Chats"
       }
     }
   }

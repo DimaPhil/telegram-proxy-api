@@ -23,6 +23,7 @@ class ResponseMeta(BaseModel):
     page: int | None = None
     page_size: int | None = None
     total: int | None = None
+    next_before_id: int | None = None
     context_size: int | None = None
     include_album: bool | None = None
     provider: Literal["bot_api", "telethon"] | None = None
