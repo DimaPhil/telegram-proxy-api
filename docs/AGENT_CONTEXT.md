@@ -80,6 +80,8 @@ Successful main-push CI triggers the Release workflow; pull-request CI does not 
 
 The supported installer verifies the CLI wheel checksum, creates a versioned isolated environment in `~/.local/share/tg/releases`, installs skill/completion and atomically updates `~/.local/bin/tg`. Previous environments remain available. It preserves unrelated executables, skills and completion files. Direct pip/wheel installs have no Python postinstall hook: users must run `tg skill install` and `tg completion install` themselves.
 
+CLI credentials live only at `~/.lilfeel/tg/credentials.json`, independent of `XDG_CONFIG_HOME`. When upgrading an installation that used `~/.config/tg/credentials.json` or a custom XDG config directory, move that file manually while preserving mode 0600 before running the new CLI.
+
 Managed skill copies live at `~/.agents/skills/tg`, with a relative Claude adapter at `~/.claude/skills/tg`. Completion files live under `~/.local/share/bash-completion/completions`, `~/.local/share/zsh/site-functions` and `~/.config/fish/completions`. Installation adds marked blocks to Bash/Zsh rc files; symlinked or conflicting managed files are preserved with warnings. For dotfile managers, use `tg completion install --no-shell-init` and integrate through the manager. Open a new shell afterward; Bash login profiles must source `.bashrc`.
 
 ## Operator checks and authorization

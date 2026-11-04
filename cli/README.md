@@ -11,7 +11,7 @@ tg operations list
 tg operations describe OPERATION_ID
 ```
 
-`tg login` reads the bearer token without echoing it, validates `/healthz`, and atomically saves credentials with mode 0600 under `$XDG_CONFIG_HOME/tg/credentials.json` (default `~/.config/tg/credentials.json`). For automation use `TG_API_URL` and `TG_API_TOKEN`, or `tg login --url URL --token-stdin`. Use `--anonymous` explicitly for an API with auth disabled. Remote APIs require HTTPS. Credentials saved for one URL are never reused for an overridden URL. HTTP redirects are never followed.
+`tg login` reads the bearer token without echoing it, validates `/healthz`, and atomically saves credentials with mode 0600 under `~/.lilfeel/tg/credentials.json`. For automation use `TG_API_URL` and `TG_API_TOKEN`, or `tg login --url URL --token-stdin`. Use `--anonymous` explicitly for an API with auth disabled. Remote APIs require HTTPS. Credentials saved for one URL are never reused for an overridden URL. HTTP redirects are never followed.
 
 Commands return the API's JSON envelope on stdout. Errors are JSON on stderr and exit 1; interruption exits 130. `Retry-After` is exposed as `retry_after`; the CLI never retries automatically. `--help` and `--version` are human-readable. Binary operations require `--output FILE`; output is published only after the download completes, and overwrites require `--overwrite`.
 
