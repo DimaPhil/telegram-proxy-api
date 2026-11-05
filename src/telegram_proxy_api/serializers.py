@@ -31,6 +31,13 @@ class MediaDescriptor:
     content_type: str
     size_bytes: int | None
 
+    @property
+    def download_media(self) -> Any:
+        media = self.message.media
+        if isinstance(media, types.MessageMediaWebPage):
+            return self.message.photo or self.message.document
+        return media
+
 
 def safe_telegram_dict(value: Any) -> dict[str, Any]:
     if value is None:

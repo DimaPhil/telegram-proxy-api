@@ -502,7 +502,7 @@ class TelethonGateway:
             raise ResourceNotFoundError(f"Media item {media_id} was not found.")
 
         async def iterator() -> AsyncIterator[bytes]:
-            async for chunk in self.client.iter_download(descriptor.message.media):
+            async for chunk in self.client.iter_download(descriptor.download_media):
                 yield chunk
 
         return MediaStream(
@@ -579,7 +579,7 @@ class TelethonGateway:
 
     async def _read_media_bytes(self, descriptor: MediaDescriptor) -> bytes:
         chunks = bytearray()
-        async for chunk in self.client.iter_download(descriptor.message.media):
+        async for chunk in self.client.iter_download(descriptor.download_media):
             chunks.extend(chunk)
         return bytes(chunks)
 
