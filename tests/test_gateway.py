@@ -497,6 +497,67 @@ async def test_stream_message_media_returns_bytes(gateway, fake_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["photo", "document", "both"])
+async def test_webpage_media_download_and_bundle_use_embedded_file(gateway, fake_client, monkeypatch, kind):
+    import io
+    import zipfile
+
+    entity = make_chat(200)
+    fake_client.input_entities.append((200, entity))
+    photo = types.Photo(
+        id=1,
+        access_hash=2,
+        file_reference=b"ref",
+        date=datetime(2024, 1, 1, tzinfo=UTC),
+        sizes=[types.PhotoSize(type="x", w=10, h=10, size=7)],
+        dc_id=2,
+    )
+    document = types.Document(
+        id=1,
+        access_hash=2,
+        file_reference=b"ref",
+        date=datetime(2024, 1, 1, tzinfo=UTC),
+        mime_type="video/mp4",
+        size=7,
+        dc_id=2,
+        attributes=[],
+    )
+    embedded = document if kind == "document" else photo
+    message = types.Message(
+        id=10,
+        peer_id=types.PeerChannel(200),
+        message="https://example.com",
+        date=datetime(2024, 1, 1, tzinfo=UTC),
+        media=types.MessageMediaWebPage(
+            webpage=types.WebPage(
+                id=1,
+                url="https://example.com",
+                display_url="example.com",
+                hash=0,
+                photo=photo if kind != "document" else None,
+                document=document if kind != "photo" else None,
+            )
+        ),
+    )
+    fake_client.messages_by_id[10] = message
+
+    async def download(media):
+        assert media is embedded
+        # Exercise Telethon's real cast, which rejects the enclosing MessageMediaWebPage.
+        assert utils._get_file_info(media).location
+        yield b"preview"
+
+    monkeypatch.setattr(fake_client, "iter_download", download)
+    items, _ = await gateway.get_message_media(chat_ref="200", message_id=10, include_album=False)
+    assert len(items) == 1
+    stream = await gateway.stream_message_media(chat_ref="200", message_id=10, media_id=items[0].media_id)
+    assert b"".join([chunk async for chunk in stream.chunks]) == b"preview"
+    bundle = await gateway.bundle_message_media(chat_ref="200", message_id=10, include_album=False)
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as archive:
+        assert archive.read(stream.file_name) == b"preview"
+
+
+@pytest.mark.asyncio
 async def test_forwarded_message_with_media_streams_normally(gateway, fake_client):
     entity = make_chat(200)
     fake_client.input_entities.append((200, entity))

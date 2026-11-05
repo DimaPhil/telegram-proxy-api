@@ -28,6 +28,8 @@ There are three distinct credentials: the API bearer token used by `tg`; the per
 
 FastAPI delegates to `TelegramGateway`. The facade returns `GatewayResult(data, meta)` for JSON operations. `meta.provider` and `meta.fallback_used` belong to each request; never add mutable “last provider” state. Binary responses carry `X-Telegram-Provider` and `X-Telegram-Fallback`. Health reports both providers and retains HTTP 200 even when degraded.
 
+Telethon link previews expose embedded photos/documents through the media manifest. Both streaming downloads and ZIP bundles use `MediaDescriptor.download_media` to select the embedded file with the same photo-first precedence as Telethon's file metadata; the enclosing `MessageMediaWebPage` cannot be passed to `iter_download`.
+
 | Operation | Route in primary mode |
 | --- | --- |
 | Owner identity, contacts, dialogs, common chats | Telethon |
