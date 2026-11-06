@@ -96,6 +96,7 @@ Only one long-lived service instance should own a Telegram session for a given a
 - `GET /resolve?value=@username`
 - `GET /chats`
 - `GET /chats/{chat_id}`
+- `GET /chats/{chat_id}/photo`
 - `GET /users/{user_id}/common-chats`
 - `GET /chats/{chat_id}/messages`
 - `GET /chats/{chat_id}/messages/{message_id}`
@@ -119,6 +120,7 @@ Only one long-lived service instance should own a Telegram session for a given a
 - `include_album=true` collects sibling messages that share the same Telegram `grouped_id`.
 - `GET /.../media/{media_id}` streams a single file with binary headers.
 - `GET /.../media/bundle` returns a ZIP archive containing every file plus `manifest.json`.
+- `GET /chats/{chat_id}/photo` returns the chat's small profile photo (normally `image/jpeg`) with the same binary headers, or 404 when the chat has no photo. It always uses Telethon.
 
 ## Development
 

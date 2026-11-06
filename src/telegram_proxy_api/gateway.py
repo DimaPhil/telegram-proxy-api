@@ -89,6 +89,31 @@ class MediaBundle:
     fallback_used: bool = False
 
 
+@dataclass(slots=True)
+class ChatPhoto:
+    file_name: str
+    content_type: str
+    content: bytes
+    provider: Literal["bot_api", "telethon"] = "telethon"
+    fallback_used: bool = False
+
+
+# Telegram serves profile photos as JPEG; the signatures guard the declared Content-Type.
+_IMAGE_SIGNATURES: tuple[tuple[bytes, str, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg", "jpg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
+)
+
+
+def _image_type(content: bytes) -> tuple[str, str]:
+    for signature, content_type, extension in _IMAGE_SIGNATURES:
+        if content.startswith(signature):
+            return content_type, extension
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    return "application/octet-stream", "bin"
+
+
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -250,6 +275,16 @@ class TelethonGateway:
         entity = await self._full_entity(await self._resolve_entity(chat_ref))
         about = getattr(entity, "about", None)
         return serialize_chat_detail(entity, about=about)
+
+    async def download_chat_photo(self, chat_ref: str) -> ChatPhoto:
+        input_entity = await self._resolve_entity(chat_ref)
+        entity = await self._full_entity(input_entity)
+        content = await self._call(self.client.download_profile_photo(entity, file=bytes, download_big=False))
+        if not content:
+            raise ResourceNotFoundError(f"Chat {chat_ref} has no profile photo.")
+        content_type, extension = _image_type(content)
+        chat_id = self._entity_key(chat_ref, input_entity)
+        return ChatPhoto(file_name=f"chat-{chat_id}-photo.{extension}", content_type=content_type, content=content)
 
     async def list_common_chats(
         self,
@@ -1256,3 +1291,7 @@ class TelegramGateway:
         return await self._telethon().bundle_message_media(
             chat_ref=chat_ref, message_id=message_id, include_album=include_album
         )
+
+    async def download_chat_photo(self, chat_ref: str) -> ChatPhoto:
+        # Profile photos are a Telethon capability; the Bot cache holds no chat photos.
+        return await self._telethon().download_chat_photo(chat_ref)

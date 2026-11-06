@@ -139,6 +139,34 @@ def create_app(
         return api_response(await gateway.get_chat(chat_id))
 
     @app.get(
+        "/chats/{chat_id}/photo",
+        operation_id="chats_photo",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": "The chat's small profile photo; Telegram serves JPEG.",
+                "content": {
+                    media_type: {"schema": {"type": "string", "format": "binary"}}
+                    for media_type in ("image/jpeg", "image/png", "image/webp", "application/octet-stream")
+                },
+            },
+            404: {"description": "The chat is unknown or has no profile photo.", "model": ProblemDetail},
+        },
+    )
+    async def download_chat_photo(
+        chat_id: str,
+        gateway: TelegramGateway = Depends(get_gateway),
+    ) -> StreamingResponse:
+        photo = await gateway.download_chat_photo(chat_id)
+        headers = {
+            "Content-Disposition": build_content_disposition(photo.file_name),
+            "Content-Length": str(len(photo.content)),
+            "X-Telegram-Provider": photo.provider,
+            "X-Telegram-Fallback": str(photo.fallback_used).lower(),
+        }
+        return StreamingResponse(iter([photo.content]), media_type=photo.content_type, headers=headers)
+
+    @app.get(
         "/users/{user_id}/common-chats",
         operation_id="users_common_chats",
         response_model=ApiResponse[list[ChatSummary]],

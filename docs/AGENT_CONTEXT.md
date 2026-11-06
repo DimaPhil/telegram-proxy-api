@@ -39,6 +39,7 @@ Telethon link previews expose embedded photos/documents through the media manife
 | Exact private message by numeric ID | Verified Business/Secretary cache, then permitted Telethon fallback |
 | Single-message media manifest | Same cache route when `include_album=false` |
 | Albums and ZIP bundles | Telethon |
+| Chat profile photo (`chats_photo`) | Telethon |
 | Single file with the cached message's `<message_id>:0` media ID | Bot preflight/stream if supported; hosted files known to exceed 20 MiB go directly to Telethon |
 
 `off` starts only Telethon. `shadow` polls/stores Bot updates but routes public reads through Telethon. `primary` applies the table. Current code conservatively requires a verified active connection and caught-up poller even for Bot metadata reads. A Bot cache miss or recoverable transport/schema failure may use Telethon once. Unsupported capabilities select Telethon directly and are not marked as attempted Bot fallback. Bot authentication failure (503), rate limit (429) and identity mismatch must not be bypassed. Telethon-only endpoints remain independent of Bot failures.

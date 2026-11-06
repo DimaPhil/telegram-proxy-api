@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from telegram_proxy_api.bot_client import BotApiError
 from telegram_proxy_api.errors import AuthenticationRequiredError, TelegramProxyError
-from telegram_proxy_api.gateway import MediaBundle, MediaStream, TelegramGateway, TelethonGateway
+from telegram_proxy_api.gateway import ChatPhoto, MediaBundle, MediaStream, TelegramGateway, TelethonGateway
 from telegram_proxy_api.models import (
     ChatDetail,
     ContactSummary,
@@ -96,6 +96,7 @@ def telethon():
     )
     provider.stream_message_media = AsyncMock(side_effect=lambda **_: MediaStream("old.txt", "text/plain", 3, chunks()))
     provider.bundle_message_media = AsyncMock(return_value=MediaBundle("bundle.zip", b"zip"))
+    provider.download_chat_photo = AsyncMock(return_value=ChatPhoto("chat-100-photo.jpg", "image/jpeg", b"jpg"))
     return provider
 
 
@@ -140,6 +141,7 @@ async def test_unsupported_capabilities_never_call_bot(hybrid):
     assert (
         await gateway.bundle_message_media(chat_ref="200", message_id=10, include_album=True)
     ).provider == "telethon"
+    assert (await gateway.download_chat_photo("-100")).provider == "telethon"
     bot.get_chat.assert_not_called()
     bot.get_file.assert_not_called()
 

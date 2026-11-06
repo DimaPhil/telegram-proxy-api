@@ -20,6 +20,7 @@ tg me
 tg chats list --page 1 --page-size 25
 tg resolve --value @channelname
 tg chats get --chat-id=-1001234567890
+tg chats photo --chat-id=-1001234567890 --output ./avatar.jpg
 tg messages list --chat-id 123456 --page 1 --page-size 25
 tg messages get --chat-id 123456 --message-id 42
 tg messages context --chat-id 123456 --message-id 42 --context-size 5
@@ -45,7 +46,7 @@ For an operation without a friendly command, use `tg operations call OPERATION_I
 
 ## Media and interpretation
 
-Use the media ID returned by `tg media list`, then run `tg media download --chat-id CHAT_ID --message-id MESSAGE_ID --media-id MEDIA_ID --output ./download.bin`. `tg media bundle --chat-id CHAT_ID --message-id MESSAGE_ID --output ./media.zip` downloads the full bundle. Downloads require an explicit output file and preserve existing files unless `--overwrite` is supplied. Interrupted downloads leave no completed output.
+Use the media ID returned by `tg media list`, then run `tg media download --chat-id CHAT_ID --message-id MESSAGE_ID --media-id MEDIA_ID --output ./download.bin`. `tg media bundle --chat-id CHAT_ID --message-id MESSAGE_ID --output ./media.zip` downloads the full bundle. `tg chats photo --chat-id CHAT_ID --output ./avatar.jpg` saves a chat's small profile photo (normally JPEG); a chat without one returns a 404 error. Downloads require an explicit output file and preserve existing files unless `--overwrite` is supplied. Interrupted downloads leave no completed output.
 
 Keep the API's `data` and `meta` distinction. Provider metadata explains whether data came from Telethon or the verified Bot cache; cached messages are not proof of complete history. Use paginated message history and search endpoints for history, and report any incomplete retrieval rather than inventing missing messages.
 

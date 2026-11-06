@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 
 from telegram_proxy_api.app import build_content_disposition, create_app
 from telegram_proxy_api.config import Settings
-from telegram_proxy_api.gateway import GatewayResult, MediaBundle, MediaStream, MessageFilter
+from telegram_proxy_api.errors import ResourceNotFoundError
+from telegram_proxy_api.gateway import ChatPhoto, GatewayResult, MediaBundle, MediaStream, MessageFilter
 from telegram_proxy_api.models import (
     ChatDetail,
     ChatSummary,
@@ -86,6 +87,11 @@ class FakeTelethon:
             about="About",
             telegram_raw={},
         )
+
+    async def download_chat_photo(self, chat_id: str):
+        if chat_id == "nophoto":
+            raise ResourceNotFoundError(f"Chat {chat_id} has no profile photo.")
+        return ChatPhoto(file_name=f"chat-{chat_id}-photo.jpg", content_type="image/jpeg", content=b"abc")
 
     async def list_common_chats(self, *, user_ref: str, page: int, page_size: int):
         self.calls["list_common_chats"] = {"user_ref": user_ref}
@@ -201,7 +207,7 @@ class FakeGateway:
     def __getattr__(self, name):
         async def call(*args, **kwargs):
             result = await getattr(self.telethon, name)(*args, **kwargs)
-            if isinstance(result, (MediaStream, MediaBundle)):
+            if isinstance(result, (MediaStream, MediaBundle, ChatPhoto)):
                 return result
             data, meta = result if isinstance(result, tuple) else (result, ResponseMeta())
             if name == "get_message_context":
@@ -258,6 +264,37 @@ def test_message_media_stream_response():
     assert response.content == b"abc"
     assert response.headers["x-telegram-provider"] == "telethon"
     assert response.headers["x-telegram-fallback"] == "false"
+
+
+def test_chat_photo_returns_image_bytes_and_binary_headers():
+    with create_test_client() as client:
+        response = client.get("/chats/-1001234567890/photo")
+        missing = client.get("/chats/nophoto/photo")
+
+    assert response.status_code == 200
+    assert response.content == b"abc"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["content-length"] == "3"
+    assert response.headers["x-telegram-provider"] == "telethon"
+    assert response.headers["x-telegram-fallback"] == "false"
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "type": "https://telegram-proxy/errors/not-found",
+        "title": "Resource not found",
+        "status": 404,
+        "detail": "Chat nophoto has no profile photo.",
+    }
+
+
+def test_chat_photo_openapi_declares_binary_image_and_problem_responses():
+    with create_test_client() as client:
+        operation = client.get("/schema/openapi.json").json()["paths"]["/chats/{chat_id}/photo"]["get"]
+
+    assert operation["operationId"] == "chats_photo"
+    content = operation["responses"]["200"]["content"]
+    assert content["image/jpeg"]["schema"] == {"type": "string", "format": "binary"}
+    assert "application/json" not in content
+    assert operation["responses"]["404"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetail")
 
 
 def test_openapi_yaml_endpoint():

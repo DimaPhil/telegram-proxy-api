@@ -52,6 +52,8 @@ class FakeClient:
         self.yielded = 0
         self.common_chats = []
         self.common_chats_max_ids: list[int] = []
+        self.profile_photos: dict[int, bytes] = {}
+        self.profile_photo_calls: list[tuple[object, object, bool]] = []
 
     async def connect(self):
         self.connected = True
@@ -135,6 +137,10 @@ class FakeClient:
             matching = [chat for chat in self.common_chats if not request.max_id or chat.id < request.max_id]
             return SimpleNamespace(chats=matching[: request.limit])
         return self.contacts_result
+
+    async def download_profile_photo(self, entity, file=None, *, download_big=True):
+        self.profile_photo_calls.append((entity, file, download_big))
+        return self.profile_photos.get(entity.id)
 
     async def iter_download(self, media):
         payload = getattr(media, "payload", b"")
@@ -607,3 +613,50 @@ async def test_call_translates_flood_wait(gateway, monkeypatch):
 
     with pytest.raises(TelegramFloodWaitError):
         await gateway._call(broken())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "content_type", "extension"),
+    [
+        (b"\xff\xd8\xff\xe0jpeg", "image/jpeg", "jpg"),
+        (b"\x89PNG\r\n\x1a\npng", "image/png", "png"),
+        (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp", "webp"),
+        (b"unknown", "application/octet-stream", "bin"),
+    ],
+)
+async def test_download_chat_photo_returns_small_photo_bytes(gateway, fake_client, payload, content_type, extension):
+    entity = make_chat(200)
+    fake_client.input_entities.append((200, entity))
+    fake_client.profile_photos[200] = payload
+
+    photo = await gateway.download_chat_photo("200")
+
+    assert photo.content == payload
+    assert photo.content_type == content_type
+    assert photo.file_name == f"chat-200-photo.{extension}"
+    assert photo.provider == "telethon"
+    assert fake_client.profile_photo_calls == [(entity, bytes, False)]
+
+
+@pytest.mark.asyncio
+async def test_download_chat_photo_fetches_full_entity_for_session_cached_peer(gateway, fake_client):
+    channel_id = 1625820829
+    input_peer = types.InputPeerChannel(channel_id=channel_id, access_hash=7)
+    channel = make_chat(channel_id)
+    fake_client.input_entities.append((types.PeerChannel(channel_id), input_peer))
+    fake_client.full_entities[utils.get_peer_id(input_peer)] = channel
+    fake_client.profile_photos[channel_id] = b"\xff\xd8\xffphoto"
+
+    photo = await gateway.download_chat_photo(f"-100{channel_id}")
+
+    assert fake_client.profile_photo_calls[0][0] is channel
+    assert photo.file_name == f"chat-{channel_id}-photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_download_chat_photo_without_photo_is_not_found(gateway, fake_client):
+    fake_client.input_entities.append((200, make_chat(200)))
+
+    with pytest.raises(ResourceNotFoundError, match="has no profile photo"):
+        await gateway.download_chat_photo("200")
