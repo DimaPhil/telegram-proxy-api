@@ -6,7 +6,10 @@ import json
 import logging
 import math
 import re
+import time
 import zipfile
+from collections import deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Callable, Generic, Literal, TypeVar
@@ -14,7 +17,9 @@ from typing import Any, AsyncIterator, Callable, Generic, Literal, TypeVar
 from telethon import TelegramClient, utils
 from telethon.errors import (
     AuthKeyDuplicatedError,
-    FloodWaitError,
+    FloodError,
+    FrozenMethodInvalidError,
+    FrozenParticipantMissingError,
     InviteHashExpiredError,
     InviteHashInvalidError,
     RPCError,
@@ -33,7 +38,9 @@ from .config import Settings
 from .errors import (
     AuthenticationRequiredError,
     BadRequestError,
+    LocalRateLimitError,
     ResourceNotFoundError,
+    TelegramAccountFrozenError,
     TelegramFloodWaitError,
     TelegramProxyError,
 )
@@ -69,6 +76,47 @@ _INTEGER_REF = re.compile(r"^-?\d+$")
 _MAX_SIGNED_CHAT_ID = 2_147_483_647
 _COMMON_CHATS_BATCH = 100
 _INPUT_PEER_TYPES = (types.InputPeerUser, types.InputPeerSelf, types.InputPeerChat, types.InputPeerChannel)
+_UNRESOLVABLE_CACHE_LIMIT = 1000
+logger = logging.getLogger(__name__)
+
+
+class _RequestPacer:
+    """Bound concurrent Telegram operations and space out their starts."""
+
+    def __init__(self, max_in_flight: int, min_interval: float) -> None:
+        self._slots = asyncio.Semaphore(max_in_flight)
+        self._min_interval = min_interval
+        self._spacing = asyncio.Lock()
+        self._next_start = 0.0
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        async with self._slots:
+            async with self._spacing:
+                delay = self._next_start - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._next_start = time.monotonic() + self._min_interval
+            yield
+
+
+class _SlidingWindowBudget:
+    """Allow at most `limit` events per rolling `window` seconds."""
+
+    def __init__(self, limit: int, window: float) -> None:
+        self._limit = limit
+        self._window = window
+        self._events: deque[float] = deque()
+
+    def reserve(self) -> int:
+        """Record an event and return 0, or return the seconds until one is allowed."""
+        now = time.monotonic()
+        while self._events and now - self._events[0] >= self._window:
+            self._events.popleft()
+        if len(self._events) >= self._limit:
+            return max(1, math.ceil(self._window - (now - self._events[0])))
+        self._events.append(now)
+        return 0
 
 
 @dataclass(slots=True)
@@ -155,6 +203,11 @@ class TelethonGateway:
         self._started = False
         self._start_lock = asyncio.Lock()
         self._history_limiter = asyncio.Semaphore(settings.telegram_history_concurrency)
+        self._pacer = _RequestPacer(settings.telegram_max_concurrent_requests, settings.telegram_min_request_interval)
+        self._download_limiter = asyncio.Semaphore(settings.telegram_download_concurrency)
+        self._resolve_lock = asyncio.Lock()
+        self._resolve_budget = _SlidingWindowBudget(settings.telegram_resolve_limit, settings.telegram_resolve_window)
+        self._unresolvable: dict[str, float] = {}
         self._entity_cache: dict[str, Any] = {}
 
     @property
@@ -537,8 +590,10 @@ class TelethonGateway:
             raise ResourceNotFoundError(f"Media item {media_id} was not found.")
 
         async def iterator() -> AsyncIterator[bytes]:
-            async for chunk in self.client.iter_download(descriptor.download_media):
-                yield chunk
+            # The permit is taken on first read and released when the response closes the generator.
+            async with self._download_limiter:
+                async for chunk in self.client.iter_download(descriptor.download_media):
+                    yield chunk
 
         return MediaStream(
             file_name=descriptor.file_name,
@@ -614,8 +669,9 @@ class TelethonGateway:
 
     async def _read_media_bytes(self, descriptor: MediaDescriptor) -> bytes:
         chunks = bytearray()
-        async for chunk in self.client.iter_download(descriptor.download_media):
-            chunks.extend(chunk)
+        async with self._download_limiter:
+            async for chunk in self.client.iter_download(descriptor.download_media):
+                chunks.extend(chunk)
         return bytes(chunks)
 
     async def _fetch_message(self, entity: Any, message_id: int) -> Any:
@@ -636,27 +692,92 @@ class TelethonGateway:
         if cache_key in self._entity_cache:
             return self._entity_cache[cache_key]
 
-        candidates = self._lookup_candidates(peer_ref)
-        entity = None
-
-        for candidate in candidates:
-            try:
-                entity = await self.client.get_input_entity(candidate)
-                break
-            except (TypeError, ValueError):
-                pass
-
-        if entity is None:
-            remote_candidate = candidates[0]
-            if not allow_remote_lookup and not self._is_numeric_reference(peer_ref):
-                raise ResourceNotFoundError(
-                    f"Unknown chat reference '{peer_ref}'. Resolve it once and use its numeric id."
-                ) from None
-            entity = await self._call(self.client.get_entity(remote_candidate))
+        if self._is_numeric_reference(peer_ref):
+            entity = await self._resolve_numeric(self._lookup_candidates(peer_ref))
+        else:
+            name = str(peer_ref).strip()
+            entity = self._session_input_entity(name)
+            if entity is None:
+                if not allow_remote_lookup:
+                    raise ResourceNotFoundError(
+                        f"Unknown chat reference '{peer_ref}'. Resolve it once and use its numeric id."
+                    )
+                entity = await self._resolve_remote_name(name)
 
         self._remember_entity(cache_key, entity)
         self._remember_entity(self._entity_key(peer_ref, entity), entity)
         return entity
+
+    def _session_input_entity(self, candidate: Any) -> Any | None:
+        """Look a peer up in the session database only; never touches the network.
+
+        `TelegramClient.get_input_entity` falls back to `contacts.resolveUsername` for strings,
+        the most flood-prone read method, so string lookups must not go through it.
+        """
+        if isinstance(candidate, str) and candidate.lower() in {"me", "self"}:
+            return types.InputPeerSelf()
+        try:
+            return self.client.session.get_input_entity(candidate)
+        except (TypeError, ValueError):
+            return None
+
+    async def _resolve_numeric(self, candidates: list[Any]) -> Any:
+        for candidate in candidates:
+            entity = self._session_input_entity(candidate)
+            if entity is not None:
+                return entity
+        # Numeric IDs never trigger username resolution; Telethon may try users.getUsers or
+        # channels.getChannels with a zero access hash, which only succeeds for known peers.
+        for candidate in candidates:
+            try:
+                return await self._call(self.client.get_input_entity(candidate))
+            except (TypeError, ValueError):
+                pass
+        try:
+            return await self._call(self.client.get_entity(candidates[0]))
+        except (TypeError, ValueError) as exc:
+            raise ResourceNotFoundError(f"Unknown chat reference '{candidates[0]}'.") from exc
+
+    async def _resolve_remote_name(self, name: str) -> Any:
+        """Resolve a username, phone or invite link through Telegram under a strict local budget."""
+        key = name.lower()
+        self._raise_if_unresolvable(key, name)
+        async with self._resolve_lock:
+            # A concurrent request may have resolved (and session-cached) or rejected it meanwhile.
+            cached = self._session_input_entity(name)
+            if cached is not None:
+                return cached
+            self._raise_if_unresolvable(key, name)
+            retry_after = self._resolve_budget.reserve()
+            if retry_after:
+                logger.warning("telegram_resolve_budget_exhausted retry_after=%s", retry_after)
+                raise LocalRateLimitError(
+                    retry_after,
+                    "Too many new usernames were resolved recently. Reuse numeric IDs or retry later.",
+                )
+            try:
+                return await self._call(self.client.get_entity(name))
+            except (TypeError, ValueError, ResourceNotFoundError) as exc:
+                self._remember_unresolvable(key)
+                raise ResourceNotFoundError(f"Unknown chat reference '{name}'.") from exc
+
+    def _raise_if_unresolvable(self, key: str, name: str) -> None:
+        expires = self._unresolvable.get(key)
+        if expires is not None:
+            if expires > time.monotonic():
+                raise ResourceNotFoundError(f"Unknown chat reference '{name}'.")
+            del self._unresolvable[key]
+
+    def _remember_unresolvable(self, key: str) -> None:
+        ttl = self.settings.telegram_resolve_negative_ttl
+        if ttl <= 0:
+            return
+        now = time.monotonic()
+        if len(self._unresolvable) >= _UNRESOLVABLE_CACHE_LIMIT:
+            self._unresolvable = {k: v for k, v in self._unresolvable.items() if v > now}
+            while len(self._unresolvable) >= _UNRESOLVABLE_CACHE_LIMIT:
+                self._unresolvable.pop(next(iter(self._unresolvable)))
+        self._unresolvable[key] = now + ttl
 
     @staticmethod
     def _is_numeric_reference(peer_ref: str | None) -> bool:
@@ -734,10 +855,29 @@ class TelethonGateway:
             return await self._call(awaitable)
 
     async def _call(self, awaitable: Any) -> Any:
+        async with self._pacer.slot():
+            return await self._translate_errors(awaitable)
+
+    async def _translate_errors(self, awaitable: Any) -> Any:
         try:
             return await awaitable
-        except FloodWaitError as exc:
-            raise TelegramFloodWaitError(int(math.ceil(exc.seconds))) from exc
+        except (FrozenMethodInvalidError, FrozenParticipantMissingError) as exc:
+            logger.error("telegram_account_frozen error=%s", type(exc).__name__)
+            raise TelegramAccountFrozenError(
+                "Telegram reports this account as frozen; the method is unavailable. Check the Telegram app."
+            ) from exc
+        except FloodError as exc:
+            # FLOOD_WAIT, FLOOD_PREMIUM_WAIT, SLOWMODE_WAIT and similar all carry `seconds`.
+            seconds = getattr(exc, "seconds", None)
+            if seconds is None:
+                raise TelegramProxyError(
+                    title="Telegram flood error",
+                    detail=str(exc),
+                    status_code=429,
+                    type="https://telegram-proxy/errors/flood-wait",
+                ) from exc
+            logger.warning("telegram_flood_wait error=%s seconds=%s", type(exc).__name__, seconds)
+            raise TelegramFloodWaitError(max(1, int(math.ceil(seconds)))) from exc
         except AuthKeyDuplicatedError as exc:
             raise AuthenticationRequiredError(
                 "Telegram rejected this session because it is being used elsewhere."
@@ -759,7 +899,6 @@ class TelethonGateway:
 
 
 T = TypeVar("T")
-logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)

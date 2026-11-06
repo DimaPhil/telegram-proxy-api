@@ -155,4 +155,5 @@ def settings(tmp_path):
         TELEGRAM_API_HASH="hash",
         TELEGRAM_SESSION_DIR=tmp_path / "telegram",
         TELEGRAM_SESSION_NAME="telegram_proxy_test",
+        TELEGRAM_MIN_REQUEST_INTERVAL=0,
     )

@@ -33,6 +33,29 @@ class TelegramFloodWaitError(TelegramProxyError):
         )
 
 
+class LocalRateLimitError(TelegramProxyError):
+    """A local safety budget is exhausted; nothing was sent to Telegram."""
+
+    def __init__(self, seconds: int, detail: str) -> None:
+        super().__init__(
+            title="Local rate limit",
+            detail=detail,
+            status_code=429,
+            type="https://telegram-proxy/errors/local-rate-limit",
+            headers={"Retry-After": str(seconds)},
+        )
+
+
+class TelegramAccountFrozenError(TelegramProxyError):
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            title="Telegram account frozen",
+            detail=detail,
+            status_code=403,
+            type="https://telegram-proxy/errors/account-frozen",
+        )
+
+
 class ResourceNotFoundError(TelegramProxyError):
     def __init__(self, detail: str) -> None:
         super().__init__(

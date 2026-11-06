@@ -88,6 +88,20 @@ For local development, `.env.example` uses `./data/telegram` so `make auth` writ
 
 Only one long-lived service instance should own a Telegram session for a given account. Running the same session from multiple hosts or containers risks `AUTH_KEY_DUPLICATED`, which invalidates the session.
 
+## Request Pacing
+
+Telegram publishes no request limits for user accounts, so the service applies conservative local budgets to keep the personal account away from bursts and repeated username lookups:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TELEGRAM_MAX_CONCURRENT_REQUESTS` | `2` | Telegram operations in flight at once. |
+| `TELEGRAM_MIN_REQUEST_INTERVAL` | `0.35` | Minimum seconds between operation starts. |
+| `TELEGRAM_DOWNLOAD_CONCURRENCY` | `2` | Concurrent media downloads, streams and ZIP bundles. |
+| `TELEGRAM_RESOLVE_LIMIT` / `TELEGRAM_RESOLVE_WINDOW` | `20` / `3600` | New usernames, phones or invite links resolved through Telegram per rolling window. |
+| `TELEGRAM_RESOLVE_NEGATIVE_TTL` | `3600` | Seconds a name Telegram could not resolve is answered locally as not found (`0` disables). |
+
+Usernames already in the session database never reach Telegram. A username that is not cached is resolved only by endpoints that explicitly allow it (`/resolve`, `from_user`, common chats); other endpoints return 404 and ask for the numeric ID. An exhausted local budget returns 429 with `Retry-After` and type `local-rate-limit` without contacting Telegram. Telegram flood waits of every kind return 429 with `Retry-After`; a frozen account returns 403 with type `account-frozen`.
+
 ## API Surface
 
 - `GET /healthz`
