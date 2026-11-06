@@ -632,19 +632,20 @@ class TelethonGateway:
             raise BadRequestError("Basic groups cannot be joined by id; only public channels and supergroups.")
         chat_id = str(utils.get_peer_id(peer))
         input_channel = types.InputChannel(peer.channel_id, peer.access_hash)
-        chats = await self._call(_guard_join(self.client(GetChannelsRequest(id=[input_channel]))))
-        channel = next(iter(getattr(chats, "chats", [])), None)
-        if channel is None:
-            raise ResourceNotFoundError(f"Unknown chat reference '{chat_ref}'.")
-        if isinstance(channel, types.ChannelForbidden):
-            raise NotJoinableError("The chat is private or this account is banned from it.")
-        if not getattr(channel, "left", False):
-            return await self._existing_membership(chat_id, peer)
-        if not _is_public(channel):
-            raise NotJoinableError("Only public channels and supergroups can be joined; this chat needs an invite.")
-        if getattr(channel, "join_request", False):
-            raise NotJoinableError("This chat requires admin approval to join.")
+        # Check membership under the lock so a concurrent retry sees the first join and never re-mutes.
         async with self._join_lock:
+            chats = await self._call(_guard_join(self.client(GetChannelsRequest(id=[input_channel]))))
+            channel = next(iter(getattr(chats, "chats", [])), None)
+            if channel is None:
+                raise ResourceNotFoundError(f"Unknown chat reference '{chat_ref}'.")
+            if isinstance(channel, types.ChannelForbidden):
+                raise NotJoinableError("The chat is private or this account is banned from it.")
+            if not getattr(channel, "left", False):
+                return await self._existing_membership(chat_id, peer)
+            if not _is_public(channel):
+                raise NotJoinableError("Only public channels and supergroups can be joined; this chat needs an invite.")
+            if getattr(channel, "join_request", False):
+                raise NotJoinableError("This chat requires admin approval to join.")
             retry_after = self._join_budget.reserve()
             if retry_after:
                 logger.warning("telegram_join_budget_exhausted retry_after=%s", retry_after)
@@ -681,8 +682,9 @@ class TelethonGateway:
     async def _best_effort(self, action: str, request: Any) -> bool:
         try:
             await self._call(self.client(request))
-        except TelegramProxyError as exc:
-            logger.warning("telegram_join_followup_failed action=%s error=%s", action, exc.title)
+        except Exception as exc:  # The join already happened; report the follow-up instead of failing it.
+            detail = exc.title if isinstance(exc, TelegramProxyError) else type(exc).__name__
+            logger.warning("telegram_join_followup_failed action=%s error=%s", action, detail)
             return False
         return True
 

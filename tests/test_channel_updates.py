@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -424,3 +425,37 @@ async def test_disabled_updates_skip_the_handler_and_refuse_streams(settings):
     assert client.event_handlers == []
     with pytest.raises(CapabilityUnavailableError):
         service.updates_hub()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_transport_failures_still_report_the_join(gateway, client):
+    client.know(CHANNEL)
+    client.channels[CHANNEL] = channel(CHANNEL)
+    client.failures[UpdateNotifySettingsRequest] = ValueError("Request was unsuccessful 3 time(s)")
+    client.failures[EditPeerFoldersRequest] = ConnectionError("disconnected")
+
+    result = await gateway.join_chat(str(CHANNEL))
+
+    assert (result.already_member, result.muted, result.archived) == (False, False, False)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_joins_join_once_and_the_second_sees_membership(gateway, client):
+    client.know(CHANNEL)
+    client.channels[CHANNEL] = channel(CHANNEL)
+    client.tops[CHANNEL] = 1
+    original = client.__call__
+
+    async def call(request):
+        result = await original(request)
+        if isinstance(request, JoinChannelRequest):
+            client.channels[CHANNEL] = channel(CHANNEL, left=False)
+        return result
+
+    client.__class__ = type("RacingClient", (ChannelClient,), {"__call__": lambda self, request: call(request)})
+
+    first, second = await asyncio.gather(gateway.join_chat(str(CHANNEL)), gateway.join_chat(str(CHANNEL)))
+
+    assert sorted([first.already_member, second.already_member]) == [False, True]
+    assert len(client.requests_of(JoinChannelRequest)) == 1
+    assert len(client.requests_of(UpdateNotifySettingsRequest)) == 1
