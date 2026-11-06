@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from telethon import errors as rpc_errors
 from telethon import utils
 from telethon.tl import types
 from telethon.tl.functions.messages import GetCommonChatsRequest
@@ -13,7 +16,9 @@ from telegram_proxy_api import gateway as gateway_module
 from telegram_proxy_api.errors import (
     AuthenticationRequiredError,
     BadRequestError,
+    LocalRateLimitError,
     ResourceNotFoundError,
+    TelegramAccountFrozenError,
     TelegramFloodWaitError,
 )
 from telegram_proxy_api.gateway import MessageFilter
@@ -33,8 +38,25 @@ class FakeContactsResult:
         self.users = users
 
 
+class FakeSession:
+    """Session-database lookups: synchronous and never networked, like Telethon's SQLiteSession."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def get_input_entity(self, lookup):
+        self._client.session_lookups += 1
+        for candidate, entity in self._client.input_entities:
+            if candidate == lookup or repr(candidate) == repr(lookup):
+                return entity
+        raise ValueError("not cached")
+
+
 class FakeClient:
     def __init__(self):
+        self.session = FakeSession(self)
+        self.session_lookups = 0
+        self.remote_lookups: list[object] = []
         self.connected = False
         self.authorized = True
         self.input_entities: list[tuple[object, object]] = []
@@ -81,8 +103,12 @@ class FakeClient:
         if isinstance(lookup, TLObject):
             self.full_entity_lookups.append(lookup)
             return self.full_entities[utils.get_peer_id(lookup)]
+        self.remote_lookups.append(lookup)
+        await asyncio.sleep(0)
         if lookup not in self.entities:
             raise ValueError("not found")
+        # Telethon stores every entity it receives in the session database.
+        self.input_entities.append((lookup, self.entities[lookup]))
         return self.entities[lookup]
 
     async def get_dialogs(self, limit=None):
@@ -225,7 +251,8 @@ async def test_resolve_uses_cache_after_first_lookup(gateway, fake_client):
 
     assert first.peer.id == "200"
     assert second.peer.id == "200"
-    assert fake_client.get_input_entity_calls == 1
+    assert fake_client.remote_lookups == ["@engineering"]
+    assert fake_client.get_input_entity_calls == 0
     assert fake_client.full_entity_lookups == []
 
 
@@ -275,7 +302,7 @@ async def test_resolve_marked_channel_id_uses_peer_channel_candidate(gateway, fa
     resolved = await gateway.get_chat("-1003158415185")
 
     assert resolved.title == "Channelish"
-    assert fake_client.get_input_entity_calls == 1
+    assert (fake_client.session_lookups, fake_client.get_input_entity_calls) == (1, 0)
 
 
 @pytest.mark.asyncio
@@ -286,7 +313,7 @@ async def test_resolve_negative_raw_channel_id_falls_back_to_channel_candidate(g
     messages, _ = await gateway.list_messages(chat_ref="-3158415185", page=1, page_size=1)
 
     assert messages == []
-    assert fake_client.get_input_entity_calls == 1
+    assert (fake_client.session_lookups, fake_client.get_input_entity_calls) == (1, 0)
 
 
 @pytest.mark.asyncio
@@ -601,18 +628,179 @@ async def test_invalid_page_size_raises(gateway):
 
 
 @pytest.mark.asyncio
-async def test_call_translates_flood_wait(gateway, monkeypatch):
-    class FakeFloodWait(Exception):
-        def __init__(self, seconds):
-            self.seconds = seconds
-
-    monkeypatch.setattr("telegram_proxy_api.gateway.FloodWaitError", FakeFloodWait)
-
+@pytest.mark.parametrize(
+    "error",
+    [
+        rpc_errors.FloodWaitError(request=None, capture=9),
+        rpc_errors.FloodPremiumWaitError(request=None, capture=9),
+        rpc_errors.SlowModeWaitError(request=None, capture=9),
+    ],
+)
+async def test_call_translates_every_timed_flood_error_to_retry_after(gateway, error):
     async def broken():
-        raise FakeFloodWait(9)
+        raise error
 
-    with pytest.raises(TelegramFloodWaitError):
+    with pytest.raises(TelegramFloodWaitError) as raised:
         await gateway._call(broken())
+
+    assert raised.value.status_code == 429
+    assert raised.value.headers == {"Retry-After": "9"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [rpc_errors.FrozenMethodInvalidError(request=None), rpc_errors.FrozenParticipantMissingError(request=None)],
+)
+async def test_call_reports_frozen_account_distinctly(gateway, error):
+    async def broken():
+        raise error
+
+    with pytest.raises(TelegramAccountFrozenError) as raised:
+        await gateway._call(broken())
+
+    assert raised.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_unknown_username_without_remote_permission_never_reaches_telegram(gateway, fake_client):
+    with pytest.raises(ResourceNotFoundError):
+        await gateway.list_messages(chat_ref="@stranger", page=1, page_size=5)
+
+    assert fake_client.remote_lookups == []
+    assert fake_client.get_input_entity_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_username_is_resolved_once_then_negatively_cached(gateway, fake_client):
+    for _ in range(3):
+        with pytest.raises(ResourceNotFoundError):
+            await gateway.resolve("@ghost")
+
+    assert fake_client.remote_lookups == ["@ghost"]
+    assert fake_client.get_input_entity_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_negative_resolve_cache_expires_is_bounded_and_can_be_disabled(settings, fake_client, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(gateway_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gateway_module, "_UNRESOLVABLE_CACHE_LIMIT", 2)
+    gateway = TelegramGateway(settings, client_factory=lambda *args, **kwargs: fake_client)
+    gateway._client = fake_client
+    gateway._started = True
+
+    for name in ("@ghost", "@ghost", "@other", "@third"):
+        with pytest.raises(ResourceNotFoundError):
+            await gateway.resolve(name)
+    assert fake_client.remote_lookups == ["@ghost", "@other", "@third"]
+    assert len(gateway._unresolvable) == 2
+
+    clock[0] += settings.telegram_resolve_negative_ttl + 1
+    with pytest.raises(ResourceNotFoundError):
+        await gateway.resolve("@third")
+    assert fake_client.remote_lookups[-1] == "@third"
+
+    uncached = settings.model_copy(update={"telegram_resolve_negative_ttl": 0})
+    gateway = TelegramGateway(uncached, client_factory=lambda *args, **kwargs: fake_client)
+    gateway._client = fake_client
+    gateway._started = True
+    fake_client.remote_lookups.clear()
+    for _ in range(2):
+        with pytest.raises(ResourceNotFoundError):
+            await gateway.resolve("@ghost")
+    assert fake_client.remote_lookups == ["@ghost", "@ghost"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resolves_of_one_username_hit_telegram_once(gateway, fake_client):
+    fake_client.entities["@busy"] = make_chat(300, title="Busy")
+
+    results = await asyncio.gather(*(gateway.resolve("@busy") for _ in range(4)))
+
+    assert {result.peer.id for result in results} == {"300"}
+    assert fake_client.remote_lookups == ["@busy"]
+
+
+@pytest.mark.asyncio
+async def test_username_resolve_budget_rejects_locally_with_retry_after(settings, fake_client):
+    limited = settings.model_copy(update={"telegram_resolve_limit": 2, "telegram_resolve_window": 600})
+    gateway = TelegramGateway(limited, client_factory=lambda *args, **kwargs: fake_client)
+    gateway._client = fake_client
+    gateway._started = True
+    for index in range(3):
+        fake_client.entities[f"@name{index}"] = make_chat(400 + index)
+
+    await gateway.resolve("@name0")
+    await gateway.resolve("@name1")
+    with pytest.raises(LocalRateLimitError) as raised:
+        await gateway.resolve("@name2")
+
+    assert raised.value.status_code == 429
+    assert 1 <= int(raised.value.headers["Retry-After"]) <= 600
+    assert fake_client.remote_lookups == ["@name0", "@name1"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_numeric_reference_is_not_found(gateway):
+    with pytest.raises(ResourceNotFoundError):
+        await gateway.get_chat("987654")
+
+
+def test_sliding_window_budget_expires_old_events(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(gateway_module.time, "monotonic", lambda: clock[0])
+    budget = gateway_module._SlidingWindowBudget(limit=2, window=10)
+
+    assert (budget.reserve(), budget.reserve()) == (0, 0)
+    clock[0] = 104.0
+    assert budget.reserve() == 6
+    clock[0] = 110.0
+    assert budget.reserve() == 0
+
+
+@pytest.mark.asyncio
+async def test_request_pacer_bounds_concurrency_and_spaces_starts():
+    pacer = gateway_module._RequestPacer(max_in_flight=1, min_interval=0.02)
+    active = 0
+    peak = 0
+    starts: list[float] = []
+
+    async def operation():
+        nonlocal active, peak
+        async with pacer.slot():
+            starts.append(time.monotonic())
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0)
+            active -= 1
+
+    await asyncio.gather(*(operation() for _ in range(3)))
+
+    assert peak == 1
+    assert all(later - earlier >= 0.015 for earlier, later in zip(starts, starts[1:]))
+
+
+@pytest.mark.asyncio
+async def test_media_streams_share_the_download_concurrency_limit(settings, fake_client):
+    limited = settings.model_copy(update={"telegram_download_concurrency": 1})
+    gateway = TelegramGateway(limited, client_factory=lambda *args, **kwargs: fake_client)
+    gateway._client = fake_client
+    gateway._started = True
+    fake_client.input_entities.append((200, make_chat(200)))
+    media, file = make_media(payload=b"payload", file_name="photo.jpg")
+    fake_client.messages_by_id[10] = make_message(10, media=media, file=file)
+
+    first = await gateway.stream_message_media(chat_ref="200", message_id=10, media_id="10:0")
+    second = await gateway.stream_message_media(chat_ref="200", message_id=10, media_id="10:0")
+    await anext(first.chunks)
+    waiting = asyncio.create_task(anext(second.chunks))
+    await asyncio.sleep(0.01)
+    assert not waiting.done()
+
+    await first.chunks.aclose()
+    assert await asyncio.wait_for(waiting, timeout=1) == b"pay"
+    await second.chunks.aclose()
 
 
 @pytest.mark.asyncio

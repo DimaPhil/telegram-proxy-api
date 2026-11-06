@@ -67,6 +67,14 @@ class Settings(BaseSettings):
         alias="TELEGRAM_HISTORY_CONCURRENCY",
     )
     telegram_album_window: int = Field(default=24, alias="TELEGRAM_ALBUM_WINDOW")
+    # Account-safety pacing. Telegram publishes no limits for user accounts, so these are
+    # conservative local budgets that keep request bursts and username lookups rare.
+    telegram_max_concurrent_requests: int = Field(default=2, alias="TELEGRAM_MAX_CONCURRENT_REQUESTS", ge=1)
+    telegram_min_request_interval: float = Field(default=0.35, alias="TELEGRAM_MIN_REQUEST_INTERVAL", ge=0)
+    telegram_download_concurrency: int = Field(default=2, alias="TELEGRAM_DOWNLOAD_CONCURRENCY", ge=1)
+    telegram_resolve_limit: int = Field(default=20, alias="TELEGRAM_RESOLVE_LIMIT", ge=1)
+    telegram_resolve_window: int = Field(default=3600, alias="TELEGRAM_RESOLVE_WINDOW", ge=1)
+    telegram_resolve_negative_ttl: int = Field(default=3600, alias="TELEGRAM_RESOLVE_NEGATIVE_TTL", ge=0)
 
     telegram_bot_mode: Literal["off", "shadow", "primary"] = Field(default="off", alias="TELEGRAM_BOT_MODE")
     telegram_bot_token: SecretStr = Field(default=SecretStr(""), alias="TELEGRAM_BOT_TOKEN")

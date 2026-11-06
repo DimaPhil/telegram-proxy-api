@@ -44,6 +44,14 @@ Telethon link previews expose embedded photos/documents through the media manife
 
 `off` starts only Telethon. `shadow` polls/stores Bot updates but routes public reads through Telethon. `primary` applies the table. Current code conservatively requires a verified active connection and caught-up poller even for Bot metadata reads. A Bot cache miss or recoverable transport/schema failure may use Telethon once. Unsupported capabilities select Telethon directly and are not marked as attempted Bot fallback. Bot authentication failure (503), rate limit (429) and identity mismatch must not be bypassed. Telethon-only endpoints remain independent of Bot failures.
 
+## Telegram account safety
+
+The Telethon session is the owner's personal account, so request shape matters as much as correctness. `TelethonGateway._call` is the single choke point: every Telegram operation takes a `_RequestPacer` slot (bounded concurrency plus minimum spacing) and maps errors. Downloads hold `_download_limiter` for the whole transfer instead. Never nest `_call` inside an awaitable passed to `_call`; with one free slot that deadlocks.
+
+String references resolve from the session database only (`client.session.get_input_entity`). Do not call `client.get_input_entity` or `client.get_entity` with a string elsewhere: on a cache miss Telethon silently issues `contacts.resolveUsername`, the most flood-prone read. Remote name resolution lives in `_resolve_remote_name`, which is serialized, re-checks the session after waiting, spends the rolling `TELEGRAM_RESOLVE_LIMIT` budget and negatively caches misses. Numeric references never resolve usernames.
+
+Map every `FloodError` subclass carrying `seconds` (flood, premium flood, slow mode) to 429 with `Retry-After`, and frozen-account errors to 403 `account-frozen`. Local budget exhaustion is 429 `local-rate-limit` and must not reach Telegram. Do not add automatic retries above Telethon's own `flood_sleep_threshold`. Telethon remembers flood deadlines per request type only in memory, so restarts forget them.
+
 ## Data and concurrency invariants
 
 - Standard bot-DM `message` updates are not the owner's private conversations and never enter the read cache. Only business updates from the configured owner and active connection qualify. Revalidate with `getBusinessConnection`; compare the owner to Telethon when available.
