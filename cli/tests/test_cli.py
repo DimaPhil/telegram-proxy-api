@@ -301,3 +301,76 @@ def test_non_json_request_body_fails_contract() -> None:
                 }
             }
         )
+
+
+def test_event_stream_yields_json_events_and_skips_pings() -> None:
+    body = (
+        b"event: ready\ndata: {}\n\n"
+        b": ping\n\n"
+        b'event: message\ndata: {"chat_id": "-1001", "message_id": 5}\n\n'
+        b'data: {"plain": true}\n\n'
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/updates/stream"
+        assert request.url.params["chat_ids"] == "-1001,-1002"
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=body)
+
+    item = operation("updates_stream")
+    assert item.event_stream and not item.binary
+    with ApiClient(Credentials("https://api.example", ""), transport=httpx.MockTransport(handle)) as client:
+        events = list(client.stream_events(item, {"chat_ids": "-1001,-1002"}))
+        with pytest.raises(CliError, match="event stream"):
+            client.call(item, {"chat_ids": "-1001"})
+    assert events == [
+        {"event": "ready", "data": {}},
+        {"event": "message", "data": {"chat_id": "-1001", "message_id": 5}},
+        {"event": "message", "data": {"plain": True}},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (httpx.Response(429, headers={"Retry-After": "9"}, json={"detail": "slow down"}), "slow down"),
+        (httpx.Response(200, content=b"data: {broken\n\n"), "invalid JSON"),
+    ],
+)
+def test_event_stream_errors_are_structured(response: httpx.Response, message: str) -> None:
+    with ApiClient(Credentials("https://api.example", ""), transport=httpx.MockTransport(lambda _: response)) as client:
+        with pytest.raises(CliError, match=message):
+            list(client.stream_events(operation("updates_stream"), {"chat_ids": "-1001"}))
+
+
+def test_event_stream_transport_error_is_sanitized() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("secret-details", request=request)
+
+    with ApiClient(Credentials("https://api.example", ""), transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(CliError, match="event stream failed") as caught:
+            list(client.stream_events(operation("updates_stream"), {"chat_ids": "-1001"}))
+    assert "secret-details" not in str(caught.value)
+
+
+def test_updates_stream_command_prints_json_lines(capsys: pytest.CaptureFixture[str]) -> None:
+    save_credentials(Credentials("https://api.example", "test-secret"))
+    events = [{"event": "ready", "data": {}}, {"event": "message", "data": {"message_id": 1}}]
+    with patch.object(ApiClient, "stream_events", return_value=iter(events)) as stream:
+        assert main(["updates", "stream", "--chat-ids=-1001,-1002"]) == 0
+    assert stream.call_args.args[1] == {"chat_ids": "-1001,-1002"}
+    assert [json.loads(line) for line in capsys.readouterr().out.splitlines()] == events
+    assert main(["updates", "stream", "--chat-ids", "-1001", "--output", "events.txt"]) == 1
+    assert "Event streams" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_join_and_latest_commands_use_their_methods() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"data": {}})
+
+    with ApiClient(Credentials("https://api.example", ""), transport=httpx.MockTransport(handle)) as client:
+        client.call(operation("chats_join"), {"chat_id": "-1001"})
+        client.call(operation("chats_latest"), {"chat_ids": "-1001"})
+    assert seen == [("POST", "/chats/-1001/join"), ("GET", "/chats/latest")]

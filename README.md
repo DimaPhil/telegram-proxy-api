@@ -1,6 +1,6 @@
 # telegram-proxy-api
 
-Read-only Telegram data proxy with FastAPI, Telethon and an optional official Bot API provider. The independently installed `tg` CLI calls the deployed HTTP API and provides JSON-first access for agents. Both packages release together.
+Read-only Telegram data proxy with FastAPI, Telethon and an optional official Bot API provider. Its only write is joining a public channel or supergroup on request (muted and archived) so it can be monitored. The independently installed `tg` CLI calls the deployed HTTP API and provides JSON-first access for agents. Both packages release together.
 
 Future contributors should start with [AGENTS.md](AGENTS.md) and the [maintainer context](docs/AGENT_CONTEXT.md).
 
@@ -13,6 +13,7 @@ Future contributors should start with [AGENTS.md](AGENTS.md) and the [maintainer
 - Local-only e2e harness for a personal Telegram account, plus unit/integration tests with 80% coverage enforcement
 - Encrypted Business/Secretary update cache, verified owner identity, provider health and response provenance
 - Schema-driven `tg` commands, a bundled agent skill, shell completion and enforced API/CLI parity
+- Channel monitoring: batched newest-message ids in one Telegram request and a server-sent event stream of new messages
 
 ## Install `tg`
 
@@ -99,6 +100,10 @@ Telegram publishes no request limits for user accounts, so the service applies c
 | `TELEGRAM_DOWNLOAD_CONCURRENCY` | `2` | Concurrent media downloads, streams and ZIP bundles. |
 | `TELEGRAM_RESOLVE_LIMIT` / `TELEGRAM_RESOLVE_WINDOW` | `20` / `3600` | New usernames, phones or invite links resolved through Telegram per rolling window. |
 | `TELEGRAM_RESOLVE_NEGATIVE_TTL` | `3600` | Seconds a name Telegram could not resolve is answered locally as not found (`0` disables). |
+| `TELEGRAM_JOIN_LIMIT` / `TELEGRAM_JOIN_WINDOW` | `20` / `3600` | New channel joins per rolling window. |
+| `TELEGRAM_LATEST_NONMEMBER_TTL` | `600` | Seconds a peer that broke a batched `chats/latest` request is skipped (`0` disables). |
+| `TELEGRAM_RECEIVE_UPDATES` | `true` | Receive passive updates for `/updates/stream`; `false` makes the stream return 503. |
+| `TELEGRAM_UPDATES_QUEUE_LIMIT` / `TELEGRAM_UPDATES_PING_INTERVAL` | `1000` / `15` | Per-stream backlog before the stream is closed; seconds between `: ping` comments. |
 
 Usernames already in the session database never reach Telegram. A username that is not cached is resolved only by endpoints that explicitly allow it (`/resolve`, `from_user`, common chats); other endpoints return 404 and ask for the numeric ID. An exhausted local budget returns 429 with `Retry-After` and type `local-rate-limit` without contacting Telegram. Telegram flood waits of every kind return 429 with `Retry-After`; a frozen account returns 403 with type `account-frozen`.
 
@@ -109,6 +114,8 @@ Usernames already in the session database never reach Telegram. A username that 
 - `GET /contacts`
 - `GET /resolve?value=@username`
 - `GET /chats`
+- `GET /chats/latest?chat_ids=-100…,-100…`
+- `POST /chats/{chat_id}/join`
 - `GET /chats/{chat_id}`
 - `GET /chats/{chat_id}/photo`
 - `GET /users/{user_id}/common-chats`
@@ -119,6 +126,15 @@ Usernames already in the session database never reach Telegram. A username that 
 - `GET /chats/{chat_id}/messages/{message_id}/media`
 - `GET /chats/{chat_id}/messages/{message_id}/media/{media_id}`
 - `GET /chats/{chat_id}/messages/{message_id}/media/bundle`
+- `GET /updates/stream?chat_ids=-100…,-100…` (`text/event-stream`)
+
+## Channel Monitoring
+
+Chat ids are the marked ids `/resolve` returns (`-100…` for channels and supergroups).
+
+- `POST /chats/{chat_id}/join` joins a public channel or public supergroup, then mutes and archives it, returning `{chat_id, already_member, muted, archived}`. It is idempotent: an existing membership is reported with its current mute/archive state and never changed. Mute/archive failures only show up as `false`. Users and basic groups are 400; private, invite-only, approval-gated or banned chats are 403 `not-joinable`; flood waits and the local join budget are 429.
+- `GET /chats/latest?chat_ids=…` (1–100 distinct ids, request order kept) returns `{chat_id, member, top_message_id}` per id using one Telegram request for all member chats. Chats the account has not joined or never saw report `member: false` without extra requests.
+- `GET /updates/stream?chat_ids=…` (1–500 ids) sends `event: ready` once subscribed, `event: message` with `{chat_id, message_id, grouped_id, date}` for each new message in a requested chat, and a `: ping` comment every 15 s. Edits, deletions, service messages and unrequested chats are never sent. A stream that falls too far behind is closed; reconnect and re-sync with `chats/latest`. Delivery is best-effort: Telegram may throttle passive updates for some channels, so keep polling `chats/latest` as a fallback.
 
 ## History Filters
 

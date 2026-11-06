@@ -36,12 +36,39 @@ def test_cli_calls_every_api_operation(tmp_path):
                     "media_id": "10:0",
                     "value": "@resolved",
                     "query": "meeting & plans",
+                    "chat_ids": "100,200",
                 }
                 params = {
                     str(parameter["name"]): values[str(parameter["name"])]
                     for parameter in operation.parameters
                     if parameter.get("required")
                 }
+                if operation.event_stream:
+                    events = list(client.stream_events(operation, params))
+                    assert events == [
+                        {"event": "ready", "data": {}},
+                        {
+                            "event": "message",
+                            "data": {
+                                "chat_id": "100",
+                                "message_id": 1,
+                                "grouped_id": None,
+                                "date": "2026-01-01T00:00:00Z",
+                            },
+                        },
+                        {
+                            "event": "message",
+                            "data": {
+                                "chat_id": "200",
+                                "message_id": 2,
+                                "grouped_id": None,
+                                "date": "2026-01-01T00:00:00Z",
+                            },
+                        },
+                    ]
+                    with pytest.raises(CliError):
+                        client.call(operation, params)
+                    continue
                 output = tmp_path / operation.id if operation.binary else None
                 result = client.call(operation, params, output=output)
                 if output:

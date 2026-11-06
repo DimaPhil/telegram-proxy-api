@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
@@ -7,10 +8,12 @@ from fastapi.testclient import TestClient
 
 from telegram_proxy_api.app import build_content_disposition, create_app
 from telegram_proxy_api.config import Settings
-from telegram_proxy_api.errors import ResourceNotFoundError
+from telegram_proxy_api.errors import CapabilityUnavailableError, ResourceNotFoundError
 from telegram_proxy_api.gateway import ChatPhoto, GatewayResult, MediaBundle, MediaStream, MessageFilter
 from telegram_proxy_api.models import (
     ChatDetail,
+    ChatJoinResult,
+    ChatLatest,
     ChatSummary,
     ContactSummary,
     HealthStatus,
@@ -21,8 +24,10 @@ from telegram_proxy_api.models import (
     PeerRef,
     ResolveResult,
     ResponseMeta,
+    UpdateMessageEvent,
 )
 from telegram_proxy_api.responses import ClosingStreamingResponse
+from telegram_proxy_api.updates import UpdateHub
 
 
 async def _stream_bytes(payload: bytes):
@@ -194,15 +199,49 @@ class FakeTelethon:
     async def bundle_message_media(self, *, chat_ref: str, message_id: int, include_album: bool):
         return MediaBundle(file_name="архив.zip", content=b"zip")
 
+    async def join_chat(self, chat_ref: str):
+        self.calls["join_chat"] = {"chat_ref": chat_ref}
+        return ChatJoinResult(chat_id=chat_ref, already_member=False, muted=True, archived=True)
+
+    async def latest_messages(self, chat_ids: list[str]):
+        self.calls["latest_messages"] = {"chat_ids": chat_ids}
+        return [ChatLatest(chat_id=chat_id, member=True, top_message_id=10) for chat_id in chat_ids]
+
+
+class FiniteHub(UpdateHub):
+    """Replays fixed events and then ends the stream, so buffered test clients terminate."""
+
+    def __init__(self, events: list[UpdateMessageEvent]):
+        super().__init__(queue_limit=100)
+        self.events = events
+
+    @contextmanager
+    def subscribe(self, chat_ids):
+        with super().subscribe(chat_ids) as subscription:
+            for event in self.events:
+                self.publish(event)
+            subscription.close("done")
+            yield subscription
+
+
+def update_event(chat_id: str, message_id: int) -> UpdateMessageEvent:
+    return UpdateMessageEvent(chat_id=chat_id, message_id=message_id, date=datetime(2026, 1, 1, tzinfo=UTC))
+
 
 class FakeGateway:
     """Adapt the fixture's raw Telethon values to the facade contract."""
 
-    def __init__(self):
+    def __init__(self, hub: UpdateHub | None = None):
         self.telethon = FakeTelethon()
+        self.hub = hub or FiniteHub([update_event("100", 1), update_event("200", 2)])
 
     def health_status(self):
         return self.telethon.health_status()
+
+    def updates_hub(self):
+        if self.hub is None:
+            raise CapabilityUnavailableError("Passive updates are disabled.")
+        return self.hub
 
     def __getattr__(self, name):
         async def call(*args, **kwargs):
@@ -219,15 +258,20 @@ class FakeGateway:
         return call
 
 
-def create_test_client(
-    *, auth_enabled: bool = False, bearer_token: str | None = None, gateway: FakeGateway | None = None
-) -> TestClient:
-    settings = Settings(
+def make_settings(*, auth_enabled: bool = False, bearer_token: str | None = None, **values) -> Settings:
+    return Settings(
         TELEGRAM_API_ID=1,
         TELEGRAM_API_HASH="hash",
         API_AUTH_ENABLED=auth_enabled,
         API_BEARER_TOKEN=bearer_token,
+        **values,
     )
+
+
+def create_test_client(
+    *, auth_enabled: bool = False, bearer_token: str | None = None, gateway: FakeGateway | None = None
+) -> TestClient:
+    settings = make_settings(auth_enabled=auth_enabled, bearer_token=bearer_token)
     app = create_app(settings=settings, gateway=gateway or FakeGateway())
     return TestClient(app)
 

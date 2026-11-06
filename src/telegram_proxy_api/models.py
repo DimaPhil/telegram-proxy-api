@@ -153,3 +153,25 @@ class HealthStatus(BaseModel):
     primary_provider: Literal["bot_api", "telethon"] = "telethon"
     bot_api: BotHealth = Field(default_factory=BotHealth)
     telethon: TelethonHealth = Field(default_factory=TelethonHealth)
+
+
+class ChatJoinResult(BaseModel):
+    chat_id: str
+    already_member: bool
+    muted: bool
+    archived: bool
+
+
+class ChatLatest(BaseModel):
+    chat_id: str
+    member: bool
+    top_message_id: int | None = None
+
+
+class UpdateMessageEvent(BaseModel):
+    """Payload of a `message` server-sent event."""
+
+    chat_id: str
+    message_id: int
+    grouped_id: str | None = None
+    date: datetime
