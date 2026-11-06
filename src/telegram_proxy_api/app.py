@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from importlib.metadata import version
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
 
 import yaml
 from fastapi import Depends, FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from .config import Settings, get_settings
@@ -17,6 +19,8 @@ from .gateway import MessageFilter, TelegramGateway
 from .models import (
     ApiResponse,
     ChatDetail,
+    ChatJoinResult,
+    ChatLatest,
     ChatSummary,
     ContactSummary,
     HealthStatus,
@@ -28,6 +32,11 @@ from .models import (
     ResolveResult,
 )
 from .responses import ClosingStreamingResponse, api_response
+from .updates import sse_frames
+
+_MARKED_CHAT_ID = re.compile(r"-?[1-9]\d{0,19}")
+LATEST_CHAT_LIMIT = 100
+STREAM_CHAT_LIMIT = 500
 
 
 def build_content_disposition(file_name: str) -> str:
@@ -56,6 +65,34 @@ def message_filter(
     ),
 ) -> MessageFilter:
     return MessageFilter(from_user=from_user, since=since, until=until, before_id=before_id)
+
+
+def chat_id_list(limit: int) -> Callable[[str], list[str]]:
+    """Parse comma-separated marked chat ids (as /resolve returns them), deduplicated in first-seen order."""
+
+    def parse(
+        chat_ids: str = Query(
+            description=f"Comma-separated marked chat ids as returned by /resolve, e.g. -1001234567890; 1 to {limit}.",
+        ),
+    ) -> list[str]:
+        def invalid(message: str) -> RequestValidationError:
+            return RequestValidationError(
+                [{"type": "value_error", "loc": ("query", "chat_ids"), "msg": message, "input": chat_ids}]
+            )
+
+        values: list[str] = []
+        for item in (part.strip() for part in chat_ids.split(",")):
+            if not item:
+                continue
+            if not _MARKED_CHAT_ID.fullmatch(item):
+                raise invalid(f"Invalid chat id {item[:32]!r}; use numeric marked ids.")
+            if item not in values:
+                values.append(item)
+        if not values or len(values) > limit:
+            raise invalid(f"Provide between 1 and {limit} distinct chat ids.")
+        return values
+
+    return parse
 
 
 def create_app(
@@ -130,6 +167,52 @@ def create_app(
         gateway: TelegramGateway = Depends(get_gateway),
     ) -> ApiResponse[list[ChatSummary]]:
         return api_response(await gateway.list_chats(page=page, page_size=page_size))
+
+    # Registered before /chats/{chat_id} so "latest" is not captured as a chat id.
+    @app.get("/chats/latest", operation_id="chats_latest", response_model=ApiResponse[list[ChatLatest]])
+    async def get_latest(
+        chat_ids: list[str] = Depends(chat_id_list(LATEST_CHAT_LIMIT)),
+        gateway: TelegramGateway = Depends(get_gateway),
+    ) -> ApiResponse[list[ChatLatest]]:
+        """Newest message id per chat in one Telegram request; non-member or unknown chats report member=false."""
+        return api_response(await gateway.latest_messages(chat_ids))
+
+    @app.post("/chats/{chat_id}/join", operation_id="chats_join", response_model=ApiResponse[ChatJoinResult])
+    async def join_chat(
+        chat_id: str,
+        gateway: TelegramGateway = Depends(get_gateway),
+    ) -> ApiResponse[ChatJoinResult]:
+        """Join a public channel or supergroup, then mute and archive it. Idempotent; never sends messages."""
+        return api_response(await gateway.join_chat(chat_id))
+
+    @app.get(
+        "/updates/stream",
+        operation_id="updates_stream",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": (
+                    "Server-sent events. `event: ready` (data `{}`) once subscribed; `event: message` per new "
+                    "message in a requested chat with JSON data {chat_id, message_id, grouped_id, date}; "
+                    "`: ping` comments while idle. Edits, deletions and other chats are never sent. The stream "
+                    "closes if the client falls too far behind; reconnect and re-sync with chats_latest."
+                ),
+                "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            },
+            503: {"description": "Passive updates are disabled or Telethon is unavailable.", "model": ProblemDetail},
+        },
+    )
+    async def stream_updates(
+        chat_ids: list[str] = Depends(chat_id_list(STREAM_CHAT_LIMIT)),
+        gateway: TelegramGateway = Depends(get_gateway),
+    ) -> StreamingResponse:
+        """Best-effort push of new messages; Telegram may throttle passive updates, so keep polling as fallback."""
+        hub = gateway.updates_hub()
+        return ClosingStreamingResponse(
+            sse_frames(hub, frozenset(chat_ids), app_settings.telegram_updates_ping_interval),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/chats/{chat_id}", operation_id="chats_get", response_model=ApiResponse[ChatDetail])
     async def get_chat(

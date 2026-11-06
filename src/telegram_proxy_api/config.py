@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     telegram_resolve_limit: int = Field(default=20, alias="TELEGRAM_RESOLVE_LIMIT", ge=1)
     telegram_resolve_window: int = Field(default=3600, alias="TELEGRAM_RESOLVE_WINDOW", ge=1)
     telegram_resolve_negative_ttl: int = Field(default=3600, alias="TELEGRAM_RESOLVE_NEGATIVE_TTL", ge=0)
+    # Joining channels is the only write the API performs; keep it rare and serialized.
+    telegram_join_limit: int = Field(default=20, alias="TELEGRAM_JOIN_LIMIT", ge=1)
+    telegram_join_window: int = Field(default=3600, alias="TELEGRAM_JOIN_WINDOW", ge=1)
+    # Peers that broke a batched dialogs lookup are skipped for this long, so polling stays one request.
+    telegram_latest_nonmember_ttl: int = Field(default=600, alias="TELEGRAM_LATEST_NONMEMBER_TTL", ge=0)
+    # Passive updates feed /updates/stream; Telethon fetches gap differences itself, outside the pacer.
+    telegram_receive_updates: bool = Field(default=True, alias="TELEGRAM_RECEIVE_UPDATES")
+    telegram_updates_queue_limit: int = Field(default=1000, alias="TELEGRAM_UPDATES_QUEUE_LIMIT", ge=1)
+    telegram_updates_ping_interval: float = Field(default=15, alias="TELEGRAM_UPDATES_PING_INTERVAL", gt=0)
 
     telegram_bot_mode: Literal["off", "shadow", "primary"] = Field(default="off", alias="TELEGRAM_BOT_MODE")
     telegram_bot_token: SecretStr = Field(default=SecretStr(""), alias="TELEGRAM_BOT_TOKEN")

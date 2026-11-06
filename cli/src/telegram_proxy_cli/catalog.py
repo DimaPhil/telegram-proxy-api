@@ -16,6 +16,9 @@ COMMANDS: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", "/contacts"): ("contacts", "list"),
     ("GET", "/resolve"): ("resolve",),
     ("GET", "/chats"): ("chats", "list"),
+    ("GET", "/chats/latest"): ("chats", "latest"),
+    ("POST", "/chats/{chat_id}/join"): ("chats", "join"),
+    ("GET", "/updates/stream"): ("updates", "stream"),
     ("GET", "/chats/{chat_id}"): ("chats", "get"),
     ("GET", "/chats/{chat_id}/photo"): ("chats", "photo"),
     ("GET", "/users/{user_id}/common-chats"): ("users", "common-chats"),
@@ -48,20 +51,29 @@ class Operation:
     document: JsonObject
     parameters: tuple[JsonObject, ...]
 
-    @property
-    def binary(self) -> bool:
+    def _success_content(self) -> list[tuple[str, JsonObject]]:
         responses = object_value(self.document.get("responses", {}), "responses")
+        found: list[tuple[str, JsonObject]] = []
         for code, response in responses.items():
             if not code.startswith("2"):
                 continue
             content = object_value(object_value(response, "response").get("content", {}), "response content")
             for media_type, media in content.items():
                 schema = object_value(object_value(media, "media type").get("schema", {}), "response schema")
-                if schema.get("format") == "binary" or not (
-                    media_type == "application/json" or media_type.endswith("+json")
-                ):
-                    return True
-        return False
+                found.append((media_type, schema))
+        return found
+
+    @property
+    def event_stream(self) -> bool:
+        return any(media_type == "text/event-stream" for media_type, _ in self._success_content())
+
+    @property
+    def binary(self) -> bool:
+        return any(
+            schema.get("format") == "binary"
+            or not (media_type in {"application/json", "text/event-stream"} or media_type.endswith("+json"))
+            for media_type, schema in self._success_content()
+        )
 
 
 def operations(schema: JsonObject | None = None) -> list[Operation]:

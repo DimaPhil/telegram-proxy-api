@@ -16,6 +16,21 @@
         "title": "ApiResponse[ChatDetail]",
         "type": "object"
       },
+      "ApiResponse_ChatJoinResult_": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ChatJoinResult"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ResponseMeta"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ApiResponse[ChatJoinResult]",
+        "type": "object"
+      },
       "ApiResponse_ContactSummary_": {
         "properties": {
           "data": {
@@ -89,6 +104,25 @@
           "data"
         ],
         "title": "ApiResponse[ResolveResult]",
+        "type": "object"
+      },
+      "ApiResponse_list_ChatLatest__": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ChatLatest"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/ResponseMeta"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ApiResponse[list[ChatLatest]]",
         "type": "object"
       },
       "ApiResponse_list_ChatSummary__": {
@@ -302,6 +336,63 @@
           "type"
         ],
         "title": "ChatDetail",
+        "type": "object"
+      },
+      "ChatJoinResult": {
+        "properties": {
+          "already_member": {
+            "title": "Already Member",
+            "type": "boolean"
+          },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "chat_id": {
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "muted": {
+            "title": "Muted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chat_id",
+          "already_member",
+          "muted",
+          "archived"
+        ],
+        "title": "ChatJoinResult",
+        "type": "object"
+      },
+      "ChatLatest": {
+        "properties": {
+          "chat_id": {
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "member": {
+            "title": "Member",
+            "type": "boolean"
+          },
+          "top_message_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Message Id"
+          }
+        },
+        "required": [
+          "chat_id",
+          "member"
+        ],
+        "title": "ChatLatest",
         "type": "object"
       },
       "ChatSummary": {
@@ -1347,6 +1438,53 @@
         "summary": "Get Chats"
       }
     },
+    "/chats/latest": {
+      "get": {
+        "description": "Newest message id per chat in one Telegram request; non-member or unknown chats report member=false.",
+        "operationId": "chats_latest",
+        "parameters": [
+          {
+            "description": "Comma-separated marked chat ids as returned by /resolve, e.g. -1001234567890; 1 to 100.",
+            "in": "query",
+            "name": "chat_ids",
+            "required": true,
+            "schema": {
+              "description": "Comma-separated marked chat ids as returned by /resolve, e.g. -1001234567890; 1 to 100.",
+              "title": "Chat Ids",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_list_ChatLatest__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Latest"
+      }
+    },
     "/chats/{chat_id}": {
       "get": {
         "operationId": "chats_get",
@@ -1389,6 +1527,51 @@
           }
         ],
         "summary": "Get Chat"
+      }
+    },
+    "/chats/{chat_id}/join": {
+      "post": {
+        "description": "Join a public channel or supergroup, then mute and archive it. Idempotent; never sends messages.",
+        "operationId": "chats_join",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "title": "Chat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_ChatJoinResult_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Join Chat"
       }
     },
     "/chats/{chat_id}/messages": {
@@ -2240,6 +2423,63 @@
           }
         ],
         "summary": "Resolve Peer"
+      }
+    },
+    "/updates/stream": {
+      "get": {
+        "description": "Best-effort push of new messages; Telegram may throttle passive updates, so keep polling as fallback.",
+        "operationId": "updates_stream",
+        "parameters": [
+          {
+            "description": "Comma-separated marked chat ids as returned by /resolve, e.g. -1001234567890; 1 to 500.",
+            "in": "query",
+            "name": "chat_ids",
+            "required": true,
+            "schema": {
+              "description": "Comma-separated marked chat ids as returned by /resolve, e.g. -1001234567890; 1 to 500.",
+              "title": "Chat Ids",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent events. `event: ready` (data `{}`) once subscribed; `event: message` per new message in a requested chat with JSON data {chat_id, message_id, grouped_id, date}; `: ping` comments while idle. Edits, deletions and other chats are never sent. The stream closes if the client falls too far behind; reconnect and re-sync with chats_latest."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Passive updates are disabled or Telethon is unavailable."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stream Updates"
       }
     },
     "/users/{user_id}/common-chats": {

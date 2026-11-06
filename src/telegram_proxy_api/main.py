@@ -13,6 +13,9 @@ def main() -> None:
         host=settings.app_host,
         port=settings.app_port,
         log_level=settings.log_level.lower(),
+        # Open update streams never finish on their own; bound the wait so the lifespan
+        # shutdown still disconnects Telethon (and saves its session) before Docker's kill.
+        timeout_graceful_shutdown=5,
     )
 
 

@@ -85,3 +85,25 @@ class UnauthorizedError(TelegramProxyError):
             type="https://telegram-proxy/errors/unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+class NotJoinableError(TelegramProxyError):
+    """Telegram refuses a join by public reference: private, invite-only, approval-gated or banned."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            title="Chat cannot be joined",
+            detail=detail,
+            status_code=403,
+            type="https://telegram-proxy/errors/not-joinable",
+        )
+
+
+class CapabilityUnavailableError(TelegramProxyError):
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            title="Telegram capability unavailable",
+            detail=detail,
+            status_code=503,
+            type="https://telegram-proxy/errors/telegram-capability-unavailable",
+        )

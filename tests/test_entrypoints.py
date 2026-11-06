@@ -19,8 +19,8 @@ def test_main_runs_uvicorn(monkeypatch):
     monkeypatch.setattr(
         main.uvicorn,
         "run",
-        lambda app, host, port, log_level: captured.update(
-            {"app": app, "host": host, "port": port, "log_level": log_level}
+        lambda app, host, port, log_level, timeout_graceful_shutdown: captured.update(
+            {"app": app, "host": host, "port": port, "log_level": log_level, "grace": timeout_graceful_shutdown}
         ),
     )
 
@@ -28,6 +28,7 @@ def test_main_runs_uvicorn(monkeypatch):
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 9000
+    assert captured["grace"] == 5
 
 
 def test_auth_cli_main_runs_asyncio(monkeypatch):

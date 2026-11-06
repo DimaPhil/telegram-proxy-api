@@ -1,6 +1,6 @@
 ---
 name: tg
-description: Read Telegram chats, contacts, message history, search results, message context, and media through the deployed Telegram Proxy API using tg, including one person's messages over a date range and the chats shared with them. Use for personal-account Telegram reading, exports, and downloads, not bot creation, sending messages, or operating a Telegram desktop UI.
+description: Read Telegram chats, contacts, message history, search results, message context, and media through the deployed Telegram Proxy API using tg, including one person's messages over a date range, the chats shared with them, newest message ids for many channels, and a live stream of new messages. Use for personal-account Telegram reading, monitoring, exports, and downloads, not bot creation, sending messages, or operating a Telegram desktop UI.
 ---
 
 # Telegram Proxy CLI
@@ -43,6 +43,20 @@ tg messages list --chat-id=-1001234567890 --from-user 987654 --since 2026-05-01T
 Filtered queries paginate by cursor: repeat the same request with `--before-id` set to `meta.next_before_id` until it is null, and keep `--page` at 1. The cursor stays stable while new messages arrive; deduplicate by message ID anyway. A private chat with the user is their numeric user ID and is not part of `common-chats`. `common-chats` lists only groups both accounts currently belong to, so chats the person has left must be given explicitly. `--from-user` on search requires `--chat-id`; there is no cross-chat sender query.
 
 For an operation without a friendly command, use `tg operations call OPERATION_ID --params '{"parameter":"value"}'`. Parameters must have the JSON types shown by `describe`; integers and booleans must not be quoted. Only use `--body JSON` when the operation declares a request body.
+
+## Monitoring channels
+
+Pass marked chat ids (as `tg resolve` returns them) comma-separated with `=`, so negative ids are not read as flags.
+
+```bash
+tg chats latest --chat-ids=-1001234567890,-1009876543210
+tg updates stream --chat-ids=-1001234567890,-1009876543210
+tg chats join --chat-id=-1001234567890
+```
+
+`chats latest` (up to 100 ids) returns `member` and `top_message_id` per id from one Telegram request; `member: false` means the account has not joined that chat, so read its history instead. `updates stream` (up to 500 ids) prints JSON lines until interrupted: `ready` first, then `message` events with `chat_id`, `message_id`, `grouped_id` and `date` for new messages only. It is best-effort and closes if the reader falls behind; reconnect and re-check with `chats latest`. Do not hold streams open longer than needed.
+
+`chats join` is the only write the API offers. Run it only when the user explicitly asks to join or monitor a specific public channel or supergroup, one chat at a time. It mutes and archives a new membership and leaves an existing one untouched. A 403 `not-joinable` means the chat is private, invite-only or approval-gated; a 429 means stop joining until `retry_after`.
 
 ## Media and interpretation
 

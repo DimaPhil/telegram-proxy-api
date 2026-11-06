@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 from urllib.parse import quote
@@ -63,15 +64,7 @@ class ApiClient:
         except ValueError:
             raise CliError("The API returned invalid JSON.") from None
 
-    def call(
-        self,
-        operation: Operation,
-        parameters: JsonObject,
-        *,
-        body: Json = None,
-        output: Path | None = None,
-        overwrite: bool = False,
-    ) -> Json:
+    def _url_and_query(self, operation: Operation, parameters: JsonObject) -> tuple[str, dict[str, str]]:
         validate_parameters(operation, parameters)
         path = operation.path
         query: dict[str, str] = {}
@@ -90,6 +83,20 @@ class ApiClient:
                 query[name] = text
             else:
                 raise CliError(f"Unsupported parameter location for {name}; update the CLI contract.")
+        return self.credentials.base_url + path, query
+
+    def call(
+        self,
+        operation: Operation,
+        parameters: JsonObject,
+        *,
+        body: Json = None,
+        output: Path | None = None,
+        overwrite: bool = False,
+    ) -> Json:
+        if operation.event_stream:
+            raise CliError("This operation is an event stream; use stream_events.")
+        url, query = self._url_and_query(operation, parameters)
         if output is None and operation.binary:
             raise CliError("A binary operation requires --output FILE.")
         if body is not None and "requestBody" not in operation.document:
@@ -98,9 +105,7 @@ class ApiClient:
         if isinstance(request_body, dict) and request_body.get("required") and body is None:
             raise CliError("This operation requires --body JSON.")
         try:
-            with self.http.stream(
-                operation.method, self.credentials.base_url + path, params=query, json=body
-            ) as response:
+            with self.http.stream(operation.method, url, params=query, json=body) as response:
                 if not response.is_success:
                     response.read()
                     self._check_response(response)
@@ -113,6 +118,37 @@ class ApiClient:
             raise CliError("API transport failed. No automatic retry was performed.") from None
         except json.JSONDecodeError:
             raise CliError("API returned invalid JSON.") from None
+
+    def stream_events(self, operation: Operation, parameters: JsonObject) -> Iterator[JsonObject]:
+        """Yield server-sent events as {"event", "data"} objects; comments (pings) are skipped."""
+        url, query = self._url_and_query(operation, parameters)
+        # The server pings every 15 s, so a longer read timeout only trips on a dead connection.
+        timeout = httpx.Timeout(self.http.timeout.connect, read=60, write=30, pool=30)
+        try:
+            with self.http.stream(operation.method, url, params=query, timeout=timeout) as response:
+                if not response.is_success:
+                    response.read()
+                    self._check_response(response)
+                event = "message"
+                data: list[str] = []
+                for line in response.iter_lines():
+                    if not line:
+                        if data:
+                            yield {"event": event, "data": cast(Json, json.loads("\n".join(data)))}
+                        event, data = "message", []
+                    elif line.startswith(":"):
+                        continue
+                    else:
+                        field, _, value = line.partition(":")
+                        value = value.removeprefix(" ")
+                        if field == "event":
+                            event = value
+                        elif field == "data":
+                            data.append(value)
+        except httpx.HTTPError:
+            raise CliError("API event stream failed. No automatic retry was performed.") from None
+        except json.JSONDecodeError:
+            raise CliError("API event stream returned invalid JSON.") from None
 
     @staticmethod
     def _download(response: httpx.Response, output: Path, *, overwrite: bool) -> None:

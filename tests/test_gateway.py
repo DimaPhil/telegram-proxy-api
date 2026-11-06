@@ -76,6 +76,10 @@ class FakeClient:
         self.common_chats_max_ids: list[int] = []
         self.profile_photos: dict[int, bytes] = {}
         self.profile_photo_calls: list[tuple[object, object, bool]] = []
+        self.event_handlers: list[tuple[object, object]] = []
+
+    def add_event_handler(self, callback, event):
+        self.event_handlers.append((callback, event))
 
     async def connect(self):
         self.connected = True

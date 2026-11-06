@@ -14,22 +14,33 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Callable, Generic, Literal, TypeVar
 
-from telethon import TelegramClient, utils
+from telethon import TelegramClient, events, utils
+from telethon import errors as tg_errors
 from telethon.errors import (
     AuthKeyDuplicatedError,
+    ChannelInvalidError,
+    ChannelPrivateError,
+    ChannelPublicGroupNaError,
+    ChannelsTooMuchError,
     FloodError,
     FrozenMethodInvalidError,
     FrozenParticipantMissingError,
     InviteHashExpiredError,
     InviteHashInvalidError,
+    InviteRequestSentError,
     RPCError,
+    UserAlreadyParticipantError,
+    UserBannedInChannelError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
 from telethon.sessions import SQLiteSession
 from telethon.tl import types
+from telethon.tl.functions.account import UpdateNotifySettingsRequest
+from telethon.tl.functions.channels import GetChannelsRequest, JoinChannelRequest
 from telethon.tl.functions.contacts import GetContactsRequest
-from telethon.tl.functions.messages import GetCommonChatsRequest
+from telethon.tl.functions.folders import EditPeerFoldersRequest
+from telethon.tl.functions.messages import GetCommonChatsRequest, GetPeerDialogsRequest
 
 from .bot_client import BotApiClient, BotApiError, BotFileStream
 from .bot_serializers import bot_media_object, serialize_bot_chat, serialize_bot_message
@@ -38,7 +49,9 @@ from .config import Settings
 from .errors import (
     AuthenticationRequiredError,
     BadRequestError,
+    CapabilityUnavailableError,
     LocalRateLimitError,
+    NotJoinableError,
     ResourceNotFoundError,
     TelegramAccountFrozenError,
     TelegramFloodWaitError,
@@ -47,6 +60,8 @@ from .errors import (
 from .models import (
     BotHealth,
     ChatDetail,
+    ChatJoinResult,
+    ChatLatest,
     ChatSummary,
     ContactSummary,
     HealthStatus,
@@ -71,13 +86,58 @@ from .serializers import (
     unique_archive_name,
 )
 from .session import normalize_string_session
+from .updates import UpdateHub, message_event
 
 _INTEGER_REF = re.compile(r"^-?\d+$")
 _MAX_SIGNED_CHAT_ID = 2_147_483_647
 _COMMON_CHATS_BATCH = 100
 _INPUT_PEER_TYPES = (types.InputPeerUser, types.InputPeerSelf, types.InputPeerChat, types.InputPeerChannel)
 _UNRESOLVABLE_CACHE_LIMIT = 1000
+_ARCHIVE_FOLDER_ID = 1
+# Telegram's "muted forever": the largest 32-bit timestamp.
+_MUTE_FOREVER = datetime.fromtimestamp(2**31 - 1, UTC)
 logger = logging.getLogger(__name__)
+
+
+class _PeerBatchRejected(Exception):
+    """Telegram rejected a batched peer request because of at least one peer in it."""
+
+
+class _AlreadyParticipant(Exception):
+    pass
+
+
+async def _reject_bad_peers(awaitable: Any) -> Any:
+    try:
+        return await awaitable
+    except (tg_errors.BadRequestError, tg_errors.ForbiddenError) as exc:
+        if isinstance(exc, FrozenParticipantMissingError):
+            raise
+        raise _PeerBatchRejected(type(exc).__name__) from exc
+
+
+async def _guard_join(awaitable: Any) -> Any:
+    """Name join refusals before generic RPC translation turns them into 502s."""
+    try:
+        return await awaitable
+    except UserAlreadyParticipantError as exc:
+        raise _AlreadyParticipant() from exc
+    except ChannelsTooMuchError as exc:
+        raise NotJoinableError("The account has joined the maximum number of channels and supergroups.") from exc
+    except InviteRequestSentError as exc:
+        raise NotJoinableError("This chat requires admin approval; Telegram recorded a join request.") from exc
+    except (ChannelPrivateError, ChannelPublicGroupNaError) as exc:
+        raise NotJoinableError("The chat is private or unavailable to this account.") from exc
+    except UserBannedInChannelError as exc:
+        raise NotJoinableError("This account is banned from the chat.") from exc
+    except ChannelInvalidError as exc:
+        raise ResourceNotFoundError("Telegram does not recognize this channel.") from exc
+
+
+def _is_public(channel: Any) -> bool:
+    return bool(getattr(channel, "username", None)) or any(
+        getattr(item, "active", False) for item in getattr(channel, "usernames", None) or []
+    )
 
 
 class _RequestPacer:
@@ -209,6 +269,10 @@ class TelethonGateway:
         self._resolve_budget = _SlidingWindowBudget(settings.telegram_resolve_limit, settings.telegram_resolve_window)
         self._unresolvable: dict[str, float] = {}
         self._entity_cache: dict[str, Any] = {}
+        self._join_lock = asyncio.Lock()
+        self._join_budget = _SlidingWindowBudget(settings.telegram_join_limit, settings.telegram_join_window)
+        self._latest_skip: dict[str, float] = {}
+        self.updates = UpdateHub(settings.telegram_updates_queue_limit)
 
     @property
     def client(self) -> Any:
@@ -241,7 +305,8 @@ class TelethonGateway:
                 connection_retries=self.settings.telegram_connection_retries,
                 retry_delay=self.settings.telegram_retry_delay,
                 flood_sleep_threshold=self.settings.telegram_flood_sleep_threshold,
-                receive_updates=False,
+                # Telethon's default catch_up=False skips replaying missed updates on connect.
+                receive_updates=self.settings.telegram_receive_updates,
                 request_retries=self.settings.telegram_request_retries,
                 timeout=self.settings.telegram_request_timeout,
             )
@@ -253,10 +318,13 @@ class TelethonGateway:
                 raise AuthenticationRequiredError(
                     "Telegram session is missing or expired. Run telegram-proxy-auth first."
                 )
+            if self.settings.telegram_receive_updates:
+                self.client.add_event_handler(self._on_new_message, events.NewMessage())
 
             self._started = True
 
     async def stop(self) -> None:
+        self.updates.close_all()
         if self._client is not None:
             await self._client.disconnect()
             session = getattr(self._client, "session", None)
@@ -541,6 +609,151 @@ class TelethonGateway:
     async def resolve(self, peer_ref: str) -> ResolveResult:
         entity = await self._resolve_entity(peer_ref, allow_remote_lookup=True)
         return serialize_resolve_result(peer_ref, await self._full_entity(entity))
+
+    async def _on_new_message(self, event: Any) -> None:
+        payload = message_event(getattr(event, "message", None))
+        if payload is not None:
+            self.updates.publish(payload)
+
+    def updates_hub(self) -> UpdateHub:
+        if not self.settings.telegram_receive_updates:
+            raise CapabilityUnavailableError("Passive updates are disabled (TELEGRAM_RECEIVE_UPDATES=false).")
+        return self.updates
+
+    async def join_chat(self, chat_ref: str) -> ChatJoinResult:
+        """Join a public channel or supergroup, then mute and archive it. The API's only write action."""
+        try:
+            peer = utils.get_input_peer(await self._resolve_entity(chat_ref))
+        except TypeError:
+            raise ResourceNotFoundError(f"Unknown chat reference '{chat_ref}'.") from None
+        if isinstance(peer, (types.InputPeerUser, types.InputPeerSelf)):
+            raise BadRequestError("chat_id references a user; only public channels and supergroups can be joined.")
+        if not isinstance(peer, types.InputPeerChannel):
+            raise BadRequestError("Basic groups cannot be joined by id; only public channels and supergroups.")
+        chat_id = str(utils.get_peer_id(peer))
+        input_channel = types.InputChannel(peer.channel_id, peer.access_hash)
+        # Check membership under the lock so a concurrent retry sees the first join and never re-mutes.
+        async with self._join_lock:
+            chats = await self._call(_guard_join(self.client(GetChannelsRequest(id=[input_channel]))))
+            channel = next(iter(getattr(chats, "chats", [])), None)
+            if channel is None:
+                raise ResourceNotFoundError(f"Unknown chat reference '{chat_ref}'.")
+            if isinstance(channel, types.ChannelForbidden):
+                raise NotJoinableError("The chat is private or this account is banned from it.")
+            if not getattr(channel, "left", False):
+                return await self._existing_membership(chat_id, peer)
+            if not _is_public(channel):
+                raise NotJoinableError("Only public channels and supergroups can be joined; this chat needs an invite.")
+            if getattr(channel, "join_request", False):
+                raise NotJoinableError("This chat requires admin approval to join.")
+            retry_after = self._join_budget.reserve()
+            if retry_after:
+                logger.warning("telegram_join_budget_exhausted retry_after=%s", retry_after)
+                raise LocalRateLimitError(retry_after, "Too many chats were joined recently. Retry later.")
+            try:
+                await self._call(_guard_join(self.client(JoinChannelRequest(channel=input_channel))))
+            except _AlreadyParticipant:
+                return await self._existing_membership(chat_id, peer)
+        logger.info("telegram_chat_joined chat_id=%s", chat_id)
+        self._latest_skip.pop(chat_id, None)
+        muted = await self._best_effort(
+            "mute",
+            UpdateNotifySettingsRequest(
+                peer=types.InputNotifyPeer(peer=peer),
+                settings=types.InputPeerNotifySettings(mute_until=_MUTE_FOREVER),
+            ),
+        )
+        archived = await self._best_effort(
+            "archive",
+            EditPeerFoldersRequest(folder_peers=[types.InputFolderPeer(peer=peer, folder_id=_ARCHIVE_FOLDER_ID)]),
+        )
+        return ChatJoinResult(chat_id=chat_id, already_member=False, muted=muted, archived=archived)
+
+    async def _existing_membership(self, chat_id: str, peer: Any) -> ChatJoinResult:
+        # Chats the owner joined themselves keep their notification and folder settings.
+        self._latest_skip.pop(chat_id, None)
+        result = await self._call(self.client(GetPeerDialogsRequest(peers=[types.InputDialogPeer(peer=peer)])))
+        dialog = next((item for item in getattr(result, "dialogs", []) if isinstance(item, types.Dialog)), None)
+        mute_until = getattr(getattr(dialog, "notify_settings", None), "mute_until", None)
+        muted = isinstance(mute_until, datetime) and mute_until > datetime.now(UTC)
+        archived = getattr(dialog, "folder_id", None) == _ARCHIVE_FOLDER_ID
+        return ChatJoinResult(chat_id=chat_id, already_member=True, muted=muted, archived=archived)
+
+    async def _best_effort(self, action: str, request: Any) -> bool:
+        try:
+            await self._call(self.client(request))
+        except Exception as exc:  # The join already happened; report the follow-up instead of failing it.
+            detail = exc.title if isinstance(exc, TelegramProxyError) else type(exc).__name__
+            logger.warning("telegram_join_followup_failed action=%s error=%s", action, detail)
+            return False
+        return True
+
+    async def latest_messages(self, chat_ids: list[str]) -> list[ChatLatest]:
+        """Top message ids for member chats in one GetPeerDialogs request; never resolves unknown peers."""
+        now = time.monotonic()
+        batch: list[tuple[str, Any]] = []
+        for chat_id in chat_ids:
+            skip_until = self._latest_skip.get(chat_id)
+            if skip_until is not None:
+                if skip_until > now:
+                    continue
+                del self._latest_skip[chat_id]
+            peer = self._session_peer(chat_id)
+            if peer is not None:
+                batch.append((chat_id, peer))
+        tops: dict[str, int] = {}
+        if batch:
+            await self._collect_top_messages(batch, tops)
+        return [
+            ChatLatest(chat_id=chat_id, member=chat_id in tops, top_message_id=tops.get(chat_id))
+            for chat_id in chat_ids
+        ]
+
+    def _session_peer(self, chat_id: str) -> Any | None:
+        try:
+            peer = utils.get_peer(int(chat_id))
+        except (TypeError, ValueError):
+            return None
+        entity = self._session_input_entity(peer)
+        return entity if isinstance(entity, _INPUT_PEER_TYPES) else None
+
+    async def _collect_top_messages(self, batch: list[tuple[str, Any]], tops: dict[str, int]) -> None:
+        request = GetPeerDialogsRequest(peers=[types.InputDialogPeer(peer=peer) for _, peer in batch])
+        try:
+            result = await self._call(_reject_bad_peers(self.client(request)))
+        except _PeerBatchRejected as exc:
+            # One unusable peer fails the whole request; bisect to isolate it and skip it for a while.
+            if len(batch) == 1:
+                logger.info("telegram_latest_peer_rejected chat_id=%s error=%s", batch[0][0], exc)
+                self._remember_latest_skip(batch[0][0])
+                return
+            middle = len(batch) // 2
+            await self._collect_top_messages(batch[:middle], tops)
+            await self._collect_top_messages(batch[middle:], tops)
+            return
+        not_member = {
+            utils.get_peer_id(chat)
+            for chat in getattr(result, "chats", [])
+            if isinstance(chat, (types.ChannelForbidden, types.ChatForbidden))
+            or getattr(chat, "left", False)
+            or getattr(chat, "deactivated", False)
+        }
+        requested = {chat_id for chat_id, _ in batch}
+        for dialog in getattr(result, "dialogs", []):
+            if not isinstance(dialog, types.Dialog):
+                continue
+            peer_id = utils.get_peer_id(dialog.peer)
+            if str(peer_id) in requested and peer_id not in not_member:
+                tops[str(peer_id)] = dialog.top_message
+
+    def _remember_latest_skip(self, chat_id: str) -> None:
+        ttl = self.settings.telegram_latest_nonmember_ttl
+        if ttl <= 0:
+            return
+        now = time.monotonic()
+        if len(self._latest_skip) >= _UNRESOLVABLE_CACHE_LIMIT:
+            self._latest_skip = {key: value for key, value in self._latest_skip.items() if value > now}
+        self._latest_skip[chat_id] = now + ttl
 
     async def _full_entity(self, entity: Any) -> Any:
         # Session-cache hits are InputPeer* objects carrying only id and access hash, so metadata
@@ -1250,6 +1463,15 @@ class TelegramGateway:
     async def list_common_chats(self, *, user_ref: str, page: int, page_size: int) -> GatewayResult[list[ChatSummary]]:
         data, meta = await self._telethon().list_common_chats(user_ref=user_ref, page=page, page_size=page_size)
         return self._result(data, meta=meta)
+
+    async def join_chat(self, chat_ref: str) -> GatewayResult[ChatJoinResult]:
+        return self._result(await self._telethon().join_chat(chat_ref))
+
+    async def latest_messages(self, chat_ids: list[str]) -> GatewayResult[list[ChatLatest]]:
+        return self._result(await self._telethon().latest_messages(chat_ids))
+
+    def updates_hub(self) -> UpdateHub:
+        return self._telethon().updates_hub()
 
     async def get_chat(self, chat_ref: str) -> GatewayResult[ChatDetail]:
         eligible = self.settings.telegram_bot_mode == "primary" and self._bot_chat_ref(chat_ref)

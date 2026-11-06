@@ -120,7 +120,11 @@ def add_download_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def emit(value: object, *, error: bool = False) -> None:
-    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), file=sys.stderr if error else sys.stdout)
+    print(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        file=sys.stderr if error else sys.stdout,
+        flush=True,
+    )
 
 
 def execute(args: argparse.Namespace, catalog: list[Operation]) -> None:
@@ -219,6 +223,13 @@ def execute(args: argparse.Namespace, catalog: list[Operation]) -> None:
         )
     body_argument = cast(str | None, getattr(args, "body", None))
     body = json_argument(body_argument) if body_argument is not None else None
+    if operation.event_stream:
+        if body is not None or args.output is not None:
+            raise CliError("Event streams print JSON lines to stdout and accept no --body or --output.")
+        with ApiClient(resolve_credentials(cast(str | None, args.api_url))) as client:
+            for event in client.stream_events(operation, parameters):
+                emit(event)
+        return
     with ApiClient(resolve_credentials(cast(str | None, args.api_url))) as client:
         emit(
             client.call(
